@@ -105,7 +105,8 @@ public:
         context(_context), depthGenerator(_depthGenerator), imageGenerator(_imageGenerator),
         maxBufferSize(_maxBufferSize), isCircleBuffer(_isCircleBuffer), maxTimeDuration(_maxTimeDuration)
     {
-        task = 0;
+		ApproximateSyncGrabber::ApproximateSynchronizer *p = 0;
+        task = cv::Ptr<ApproximateSyncGrabber::ApproximateSynchronizer>(p);
 
         CV_Assert( depthGenerator.IsValid() );
         CV_Assert( imageGenerator.IsValid() );
@@ -150,7 +151,7 @@ public:
         task = new( tbb::task::allocate_root() ) TBBApproximateSynchronizerTask( *this );
         tbb::task::enqueue(*task);
 #else
-        task = new ApproximateSynchronizer( *this );
+        task = cv::Ptr<ApproximateSyncGrabber::ApproximateSynchronizer>(new ApproximateSynchronizer( *this ));
 #endif
     }
 
@@ -270,13 +271,13 @@ private:
 
         virtual inline void pushDepthMetaData( xn::DepthMetaData& depthMetaData )
         {
-            cv::Ptr<xn::DepthMetaData> depthPtr = new xn::DepthMetaData;
+            cv::Ptr<xn::DepthMetaData> depthPtr (new xn::DepthMetaData);
             depthPtr->CopyFrom(depthMetaData);
             depthQueue.push(depthPtr);
         }
         virtual inline void pushImageMetaData( xn::ImageMetaData& imageMetaData )
         {
-            cv::Ptr<xn::ImageMetaData> imagePtr = new xn::ImageMetaData;
+            cv::Ptr<xn::ImageMetaData> imagePtr(new xn::ImageMetaData);
             imagePtr->CopyFrom(imageMetaData);
             imageQueue.push(imagePtr);
         }
@@ -872,7 +873,7 @@ bool CvCapture_OpenNI::setCommonProperty( int propIdx, double propValue )
             // start synchronization
             if( approxSyncGrabber.empty() )
             {
-                approxSyncGrabber = new ApproximateSyncGrabber( context, depthGenerator, imageGenerator, maxBufferSize, isCircleBuffer, maxTimeDuration );
+                approxSyncGrabber = cv::Ptr<ApproximateSyncGrabber>( new ApproximateSyncGrabber( context, depthGenerator, imageGenerator, maxBufferSize, isCircleBuffer, maxTimeDuration ));
             }
             else
             {
@@ -1175,8 +1176,8 @@ IplImage* CvCapture_OpenNI::retrievePointCloudMap()
     int cols = depthMetaData.XRes(), rows = depthMetaData.YRes();
     cv::Mat pointCloud_XYZ( rows, cols, CV_32FC3, cv::Scalar::all(badPoint) );
 
-    cv::Ptr<XnPoint3D> proj = new XnPoint3D[cols*rows];
-    cv::Ptr<XnPoint3D> real = new XnPoint3D[cols*rows];
+    cv::Ptr<XnPoint3D> proj (new XnPoint3D[cols*rows]);
+    cv::Ptr<XnPoint3D> real (new XnPoint3D[cols*rows]);
     for( int y = 0; y < rows; y++ )
     {
         for( int x = 0; x < cols; x++ )
