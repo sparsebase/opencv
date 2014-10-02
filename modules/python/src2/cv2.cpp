@@ -1,33 +1,21 @@
+#if defined(_MSC_VER) && (_MSC_VER >= 1800)
+// eliminating duplicated round() declaration
+#define HAVE_ROUND
+#endif
+
 #include <Python.h>
 
 #define MODULESTR "cv2"
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/ndarrayobject.h>
 
-#include "opencv2/core.hpp"
-#include "opencv2/core/utility.hpp"
-#include "opencv2/contrib.hpp"
-#include "opencv2/flann/miniflann.hpp"
-#include "opencv2/imgproc.hpp"
-#include "opencv2/calib3d.hpp"
-#include "opencv2/features2d.hpp"
-#include "opencv2/objdetect.hpp"
-#include "opencv2/softcascade.hpp"
-#include "opencv2/video.hpp"
-#include "opencv2/photo.hpp"
-#include "opencv2/highgui.hpp"
-
-#include "opencv2/ml.hpp"
+#include "pyopencv_generated_include.h"
+#include "opencv2/core/types_c.h"
 
 #include "opencv2/opencv_modules.hpp"
-#ifdef HAVE_OPENCV_NONFREE
-#  include "opencv2/nonfree.hpp"
-#endif
 
 #include "pycompat.hpp"
 
-using cv::flann::IndexParams;
-using cv::flann::SearchParams;
 
 static PyObject* opencv_error = 0;
 
@@ -95,7 +83,6 @@ catch (const cv::Exception &e) \
 }
 
 using namespace cv;
-typedef cv::softcascade::ChannelFeatureBuilder softcascade_ChannelFeatureBuilder;
 
 typedef std::vector<uchar> vector_uchar;
 typedef std::vector<char> vector_char;
@@ -114,6 +101,7 @@ typedef std::vector<KeyPoint> vector_KeyPoint;
 typedef std::vector<Mat> vector_Mat;
 typedef std::vector<DMatch> vector_DMatch;
 typedef std::vector<String> vector_String;
+typedef std::vector<Scalar> vector_Scalar;
 
 typedef std::vector<std::vector<char> > vector_vector_char;
 typedef std::vector<std::vector<Point> > vector_vector_Point;
@@ -121,32 +109,11 @@ typedef std::vector<std::vector<Point2f> > vector_vector_Point2f;
 typedef std::vector<std::vector<Point3f> > vector_vector_Point3f;
 typedef std::vector<std::vector<DMatch> > vector_vector_DMatch;
 
-typedef Ptr<Algorithm> Ptr_Algorithm;
-typedef Ptr<FeatureDetector> Ptr_FeatureDetector;
-typedef Ptr<DescriptorExtractor> Ptr_DescriptorExtractor;
-typedef Ptr<Feature2D> Ptr_Feature2D;
-typedef Ptr<DescriptorMatcher> Ptr_DescriptorMatcher;
-typedef Ptr<BackgroundSubtractor> Ptr_BackgroundSubtractor;
-typedef Ptr<BackgroundSubtractorMOG> Ptr_BackgroundSubtractorMOG;
-typedef Ptr<BackgroundSubtractorMOG2> Ptr_BackgroundSubtractorMOG2;
-typedef Ptr<BackgroundSubtractorGMG> Ptr_BackgroundSubtractorGMG;
-
-typedef Ptr<StereoMatcher> Ptr_StereoMatcher;
-typedef Ptr<StereoBM> Ptr_StereoBM;
-typedef Ptr<StereoSGBM> Ptr_StereoSGBM;
-
-typedef Ptr<cv::softcascade::ChannelFeatureBuilder> Ptr_ChannelFeatureBuilder;
-typedef Ptr<CLAHE> Ptr_CLAHE;
-
 typedef SimpleBlobDetector::Params SimpleBlobDetector_Params;
 
 typedef cvflann::flann_distance_t cvflann_flann_distance_t;
 typedef cvflann::flann_algorithm_t cvflann_flann_algorithm_t;
-typedef Ptr<flann::IndexParams> Ptr_flann_IndexParams;
-typedef Ptr<flann::SearchParams> Ptr_flann_SearchParams;
 
-typedef Ptr<FaceRecognizer> Ptr_FaceRecognizer;
-typedef std::vector<Scalar> vector_Scalar;
 
 static PyObject* failmsgp(const char *fmt, ...)
 {
@@ -161,38 +128,43 @@ static PyObject* failmsgp(const char *fmt, ...)
   return 0;
 }
 
-static size_t REFCOUNT_OFFSET = (size_t)&(((PyObject*)0)->ob_refcnt) +
-    (0x12345678 != *(const size_t*)"\x78\x56\x34\x12\0\0\0\0\0")*sizeof(int);
-
-static inline PyObject* pyObjectFromRefcount(const int* refcount)
-{
-    return (PyObject*)((size_t)refcount - REFCOUNT_OFFSET);
-}
-
-static inline int* refcountFromPyObject(const PyObject* obj)
-{
-    return (int*)((size_t)obj + REFCOUNT_OFFSET);
-}
-
 class NumpyAllocator : public MatAllocator
 {
 public:
-    NumpyAllocator() {}
+    NumpyAllocator() { stdAllocator = Mat::getStdAllocator(); }
     ~NumpyAllocator() {}
 
-    void allocate(int dims, const int* sizes, int type, int*& refcount,
-                  uchar*& datastart, uchar*& data, size_t* step)
+    UMatData* allocate(PyObject* o, int dims, const int* sizes, int type, size_t* step) const
     {
+        UMatData* u = new UMatData(this);
+        u->data = u->origdata = (uchar*)PyArray_DATA((PyArrayObject*) o);
+        npy_intp* _strides = PyArray_STRIDES((PyArrayObject*) o);
+        for( int i = 0; i < dims - 1; i++ )
+            step[i] = (size_t)_strides[i];
+        step[dims-1] = CV_ELEM_SIZE(type);
+        u->size = sizes[0]*step[0];
+        u->userdata = o;
+        return u;
+    }
+
+    UMatData* allocate(int dims0, const int* sizes, int type, void* data, size_t* step, int flags, UMatUsageFlags usageFlags) const
+    {
+        if( data != 0 )
+        {
+            CV_Error(Error::StsAssert, "The data should normally be NULL!");
+            // probably this is safe to do in such extreme case
+            return stdAllocator->allocate(dims0, sizes, type, data, step, flags, usageFlags);
+        }
         PyEnsureGIL gil;
 
         int depth = CV_MAT_DEPTH(type);
         int cn = CV_MAT_CN(type);
         const int f = (int)(sizeof(size_t)/8);
         int typenum = depth == CV_8U ? NPY_UBYTE : depth == CV_8S ? NPY_BYTE :
-                      depth == CV_16U ? NPY_USHORT : depth == CV_16S ? NPY_SHORT :
-                      depth == CV_32S ? NPY_INT : depth == CV_32F ? NPY_FLOAT :
-                      depth == CV_64F ? NPY_DOUBLE : f*NPY_ULONGLONG + (f^1)*NPY_UINT;
-        int i;
+        depth == CV_16U ? NPY_USHORT : depth == CV_16S ? NPY_SHORT :
+        depth == CV_32S ? NPY_INT : depth == CV_32F ? NPY_FLOAT :
+        depth == CV_64F ? NPY_DOUBLE : f*NPY_ULONGLONG + (f^1)*NPY_UINT;
+        int i, dims = dims0;
         cv::AutoBuffer<npy_intp> _sizes(dims + 1);
         for( i = 0; i < dims; i++ )
             _sizes[i] = sizes[i];
@@ -201,22 +173,26 @@ public:
         PyObject* o = PyArray_SimpleNew(dims, _sizes, typenum);
         if(!o)
             CV_Error_(Error::StsError, ("The numpy array of typenum=%d, ndims=%d can not be created", typenum, dims));
-        refcount = refcountFromPyObject(o);
-        npy_intp* _strides = PyArray_STRIDES((PyArrayObject*) o);
-        for( i = 0; i < dims - (cn > 1); i++ )
-            step[i] = (size_t)_strides[i];
-        datastart = data = (uchar*)PyArray_DATA((PyArrayObject*) o);
+        return allocate(o, dims0, sizes, type, step);
     }
 
-    void deallocate(int* refcount, uchar*, uchar*)
+    bool allocate(UMatData* u, int accessFlags, UMatUsageFlags usageFlags) const
     {
-        PyEnsureGIL gil;
-        if( !refcount )
-            return;
-        PyObject* o = pyObjectFromRefcount(refcount);
-        Py_INCREF(o);
-        Py_DECREF(o);
+        return stdAllocator->allocate(u, accessFlags, usageFlags);
     }
+
+    void deallocate(UMatData* u) const
+    {
+        if(u)
+        {
+            PyEnsureGIL gil;
+            PyObject* o = (PyObject*)u->userdata;
+            Py_XDECREF(o);
+            delete u;
+        }
+    }
+
+    const MatAllocator* stdAllocator;
 };
 
 NumpyAllocator g_numpyAllocator;
@@ -243,7 +219,7 @@ static bool pyopencv_to(PyObject* o, Mat& m, const ArgInfo info)
 
     if( PyInt_Check(o) )
     {
-        double v[] = {PyInt_AsLong((PyObject*)o), 0., 0., 0.};
+        double v[] = {(double)PyInt_AsLong((PyObject*)o), 0., 0., 0.};
         m = Mat(4, 1, CV_64F, v).clone();
         return true;
     }
@@ -386,19 +362,22 @@ static bool pyopencv_to(PyObject* o, Mat& m, const ArgInfo info)
     }
 
     m = Mat(ndims, size, type, PyArray_DATA(oarr), step);
+    m.u = g_numpyAllocator.allocate(o, ndims, size, type, step);
+    m.addref();
 
-    if( m.data )
+    if( !needcopy )
     {
-        m.refcount = refcountFromPyObject(o);
-        if (!needcopy)
-        {
-            m.addref(); // protect the original numpy array from deallocation
-                        // (since Mat destructor will decrement the reference counter)
-        }
-    };
+        Py_INCREF(o);
+    }
     m.allocator = &g_numpyAllocator;
 
     return true;
+}
+
+template<>
+bool pyopencv_to(PyObject* o, Mat& m, const char* name)
+{
+    return pyopencv_to(o, m, ArgInfo(name, 0));
 }
 
 template<>
@@ -407,14 +386,15 @@ PyObject* pyopencv_from(const Mat& m)
     if( !m.data )
         Py_RETURN_NONE;
     Mat temp, *p = (Mat*)&m;
-    if(!p->refcount || p->allocator != &g_numpyAllocator)
+    if(!p->u || p->allocator != &g_numpyAllocator)
     {
         temp.allocator = &g_numpyAllocator;
         ERRWRAP2(m.copyTo(temp));
         p = &temp;
     }
-    p->addref();
-    return pyObjectFromRefcount(p->refcount);
+    PyObject* o = (PyObject*)p->u->userdata;
+    Py_INCREF(o);
+    return o;
 }
 
 template<>
@@ -1021,19 +1001,18 @@ template<>
 bool pyopencv_to(PyObject *o, cv::flann::IndexParams& p, const char *name)
 {
     (void)name;
-    bool ok = false;
-    PyObject* keys = PyObject_CallMethod(o,(char*)"keys",0);
-    PyObject* values = PyObject_CallMethod(o,(char*)"values",0);
+    bool ok = true;
+    PyObject* key = NULL;
+    PyObject* item = NULL;
+    Py_ssize_t pos = 0;
 
-    if( keys && values )
-    {
-        int i, n = (int)PyList_GET_SIZE(keys);
-        for( i = 0; i < n; i++ )
-        {
-            PyObject* key = PyList_GET_ITEM(keys, i);
-            PyObject* item = PyList_GET_ITEM(values, i);
-            if( !PyString_Check(key) )
+    if(PyDict_Check(o)) {
+        while(PyDict_Next(o, &pos, &key, &item)) {
+            if( !PyString_Check(key) ) {
+                ok = false;
                 break;
+            }
+
             String k = PyString_AsString(key);
             if( PyString_Check(item) )
             {
@@ -1056,14 +1035,14 @@ bool pyopencv_to(PyObject *o, cv::flann::IndexParams& p, const char *name)
                 p.setDouble(k, value);
             }
             else
+            {
+                ok = false;
                 break;
+            }
         }
-        ok = i == n && !PyErr_Occurred();
     }
 
-    Py_XDECREF(keys);
-    Py_XDECREF(values);
-    return ok;
+    return ok && !PyErr_Occurred();
 }
 
 template<>
@@ -1113,14 +1092,6 @@ bool pyopencv_to(PyObject* obj, CvSlice& r, const char* name)
         return true;
     }
     return PyArg_ParseTuple(obj, "ii", &r.start_index, &r.end_index) > 0;
-}
-
-template<>
-PyObject* pyopencv_from(CvDTreeNode* const & node)
-{
-    double value = node->value;
-    int ivalue = cvRound(value);
-    return value == ivalue ? PyInt_FromLong(ivalue) : PyFloat_FromDouble(value);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1221,9 +1192,7 @@ static int convert_to_char(PyObject *o, char *dst, const char *name = "no_name")
 #include "pyopencv_generated_types.h"
 #include "pyopencv_generated_funcs.h"
 
-static PyMethodDef methods[] = {
-
-#include "pyopencv_generated_func_tab.h"
+static PyMethodDef special_methods[] = {
   {"createTrackbar", pycvCreateTrackbar, METH_VARARGS, "createTrackbar(trackbarName, windowName, value, count, onChange) -> None"},
   {"setMouseCallback", (PyCFunction)pycvSetMouseCallback, METH_VARARGS | METH_KEYWORDS, "setMouseCallback(windowName, onMouse [, param]) -> None"},
   {NULL, NULL},
@@ -1231,6 +1200,53 @@ static PyMethodDef methods[] = {
 
 /************************************************************************/
 /* Module init */
+
+struct ConstDef
+{
+    const char * name;
+    long val;
+};
+
+static void init_submodule(PyObject * root, const char * name, PyMethodDef * methods, ConstDef * consts)
+{
+  // traverse and create nested submodules
+  std::string s = name;
+  size_t i = s.find('.');
+  while (i < s.length() && i != std::string::npos)
+  {
+    size_t j = s.find('.', i);
+    if (j == std::string::npos)
+        j = s.length();
+    std::string short_name = s.substr(i, j-i);
+    std::string full_name = s.substr(0, j);
+    i = j+1;
+
+    PyObject * d = PyModule_GetDict(root);
+    PyObject * submod = PyDict_GetItemString(d, short_name.c_str());
+    if (submod == NULL)
+    {
+        submod = PyImport_AddModule(full_name.c_str());
+        PyDict_SetItemString(d, short_name.c_str(), submod);
+    }
+    root = submod;
+  }
+
+  // populate module's dict
+  PyObject * d = PyModule_GetDict(root);
+  for (PyMethodDef * m = methods; m->ml_name != NULL; ++m)
+  {
+    PyObject * method_obj = PyCFunction_NewEx(m, NULL, NULL);
+    PyDict_SetItemString(d, m->ml_name, method_obj);
+    Py_DECREF(method_obj);
+  }
+  for (ConstDef * c = consts; c->name != NULL; ++c)
+  {
+    PyDict_SetItemString(d, c->name, PyInt_FromLong(c->val));
+  }
+
+}
+
+#include "pyopencv_generated_ns_reg.h"
 
 static int to_ok(PyTypeObject *to)
 {
@@ -1250,7 +1266,7 @@ static struct PyModuleDef cv2_moduledef =
     "Python wrapper for OpenCV.",
     -1,     /* size of per-interpreter state of the module,
                or -1 if the module keeps state in global variables. */
-    methods
+    special_methods
 };
 
 PyObject* PyInit_cv2()
@@ -1267,8 +1283,10 @@ void initcv2()
 #if PY_MAJOR_VERSION >= 3
   PyObject* m = PyModule_Create(&cv2_moduledef);
 #else
-  PyObject* m = Py_InitModule(MODULESTR, methods);
+  PyObject* m = Py_InitModule(MODULESTR, special_methods);
 #endif
+  init_submodules(m); // from "pyopencv_generated_ns_reg.h"
+
   PyObject* d = PyModule_GetDict(m);
 
   PyDict_SetItemString(d, "__version__", PyString_FromString(CV_VERSION));
@@ -1316,7 +1334,6 @@ void initcv2()
   PUBLISH(CV_64FC3);
   PUBLISH(CV_64FC4);
 
-#include "pyopencv_generated_const_reg.h"
 #if PY_MAJOR_VERSION >= 3
     return m;
 #endif

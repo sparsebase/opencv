@@ -41,10 +41,8 @@
 //M*/
 
 #include "precomp.hpp"
-
-#ifdef HAVE_IPP
-#include "ippversion.h"
-#endif
+#include "opencl_kernels_core.hpp"
+#include "opencv2/core/opencl/runtime/opencl_clamdblas.hpp"
 
 namespace cv
 {
@@ -693,11 +691,101 @@ static void GEMMStore_64fc( const Complexd* c_data, size_t c_step,
     GEMMStore(c_data, c_step, d_buf, d_buf_step, d_data, d_step, d_size, alpha, beta, flags);
 }
 
+#ifdef HAVE_CLAMDBLAS
+
+static bool ocl_gemm( InputArray matA, InputArray matB, double alpha,
+                      InputArray matC, double beta, OutputArray matD, int flags )
+{
+    int type = matA.type(), esz = CV_ELEM_SIZE(type);
+    bool haveC = matC.kind() != cv::_InputArray::NONE;
+    Size sizeA = matA.size(), sizeB = matB.size(), sizeC = haveC ? matC.size() : Size(0, 0);
+    bool atrans = (flags & GEMM_1_T) != 0, btrans = (flags & GEMM_2_T) != 0, ctrans = (flags & GEMM_3_T) != 0;
+
+    if (atrans)
+        sizeA = Size(sizeA.height, sizeA.width);
+    if (btrans)
+        sizeB = Size(sizeB.height, sizeB.width);
+    if (haveC && ctrans)
+        sizeC = Size(sizeC.height, sizeC.width);
+
+    Size sizeD(sizeB.width, sizeA.height);
+
+    CV_Assert( matB.type() == type && (!haveC || matC.type() == type) );
+    CV_Assert( sizeA.width == sizeB.height && (!haveC || sizeC == sizeD) );
+
+    matD.create(sizeD, type);
+    if ( matA.offset() % esz != 0 || matA.step() % esz != 0 ||
+         matB.offset() % esz != 0 || matB.step() % esz != 0 ||
+         (haveC && (matC.offset() % esz != 0 || matC.step() % esz != 0)) )
+        return false;
+
+    UMat A = matA.getUMat(), B = matB.getUMat(), D = matD.getUMat();
+    if (haveC)
+        ctrans ? transpose(matC, D) : matC.copyTo(D);
+    else
+        D.setTo(Scalar::all(0));
+
+    int M = sizeD.height, N = sizeD.width, K = sizeA.width;
+    int lda = (int)A.step / esz, ldb = (int)B.step / esz, ldc = (int)D.step / esz;
+    int offa = (int)A.offset / esz, offb = (int)B.offset / esz, offc = (int)D.offset / esz;
+
+    cl_command_queue clq = (cl_command_queue)ocl::Queue::getDefault().ptr();
+    clAmdBlasTranspose transA = atrans ? clAmdBlasTrans : clAmdBlasNoTrans;
+    clAmdBlasTranspose transB = btrans ? clAmdBlasTrans : clAmdBlasNoTrans;
+    clAmdBlasOrder order = clAmdBlasRowMajor;
+    clAmdBlasStatus status = clAmdBlasSuccess;
+
+    if (type == CV_32FC1)
+        status = clAmdBlasSgemmEx(order, transA, transB, M, N, K,
+                                  (cl_float)alpha, (const cl_mem)A.handle(ACCESS_READ), offa, lda,
+                                  (const cl_mem)B.handle(ACCESS_READ), offb, ldb,
+                                  (cl_float)beta, (cl_mem)D.handle(ACCESS_RW), offc, ldc,
+                                  1, &clq, 0, NULL, NULL);
+    else if (type == CV_64FC1)
+        status = clAmdBlasDgemmEx(order, transA, transB, M, N, K,
+                                  alpha, (const cl_mem)A.handle(ACCESS_READ), offa, lda,
+                                  (const cl_mem)B.handle(ACCESS_READ), offb, ldb,
+                                  beta, (cl_mem)D.handle(ACCESS_RW), offc, ldc,
+                                  1, &clq, 0, NULL, NULL);
+    else if (type == CV_32FC2)
+    {
+         cl_float2 alpha_2 = { { (cl_float)alpha, 0 } };
+         cl_float2 beta_2  = { { (cl_float)beta, 0 } };
+         status = clAmdBlasCgemmEx(order, transA, transB, M, N, K,
+                                   alpha_2, (const cl_mem)A.handle(ACCESS_READ), offa, lda,
+                                   (const cl_mem)B.handle(ACCESS_READ), offb, ldb,
+                                   beta_2, (cl_mem)D.handle(ACCESS_RW), offc, ldc,
+                                   1, &clq, 0, NULL, NULL);
+    }
+    else if (type == CV_64FC2)
+    {
+        cl_double2 alpha_2 = { { alpha, 0 } };
+        cl_double2 beta_2  = { { beta, 0 } };
+        status = clAmdBlasZgemmEx(order, transA, transB, M, N, K,
+                                  alpha_2, (const cl_mem)A.handle(ACCESS_READ), offa, lda,
+                                  (const cl_mem)B.handle(ACCESS_READ), offb, ldb,
+                                  beta_2, (cl_mem)D.handle(ACCESS_RW), offc, ldc,
+                                  1, &clq, 0, NULL, NULL);
+    }
+    else
+        CV_Error(Error::StsUnsupportedFormat, "");
+
+    return status == clAmdBlasSuccess;
+}
+
+#endif
+
 }
 
 void cv::gemm( InputArray matA, InputArray matB, double alpha,
            InputArray matC, double beta, OutputArray _matD, int flags )
 {
+#ifdef HAVE_CLAMDBLAS
+    CV_OCL_RUN(ocl::haveAmdBlas() && matA.dims() <= 2 && matB.dims() <= 2 && matC.dims() <= 2 && _matD.isUMat() &&
+        matA.cols() > 20 && matA.rows() > 20 && matB.cols() > 20, // since it works incorrect for small sizes
+        ocl_gemm(matA, matB, alpha, matC, beta, _matD, flags))
+#endif
+
     const int block_lin_size = 128;
     const int block_size = block_lin_size * block_lin_size;
 
@@ -734,7 +822,7 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
         break;
     }
 
-    if( C.data )
+    if( !C.empty() )
     {
         CV_Assert( C.type() == type &&
             (((flags&GEMM_3_T) == 0 && C.rows == d_size.height && C.cols == d_size.width) ||
@@ -753,9 +841,9 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
     {
         if( type == CV_32F )
         {
-            float* d = (float*)D.data;
-            const float *a = (const float*)A.data,
-                        *b = (const float*)B.data,
+            float* d = D.ptr<float>();
+            const float *a = A.ptr<float>(),
+                        *b = B.ptr<float>(),
                         *c = (const float*)C.data;
             size_t d_step = D.step/sizeof(d[0]),
                 a_step = A.step/sizeof(a[0]),
@@ -881,9 +969,9 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
 
         if( type == CV_64F )
         {
-            double* d = (double*)D.data;
-            const double *a = (const double*)A.data,
-                         *b = (const double*)B.data,
+            double* d = D.ptr<double>();
+            const double *a = A.ptr<double>(),
+                         *b = B.ptr<double>(),
                          *c = (const double*)C.data;
             size_t d_step = D.step/sizeof(d[0]),
                 a_step = A.step/sizeof(a[0]),
@@ -1013,6 +1101,7 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
     GEMMBlockMulFunc blockMulFunc;
     GEMMStoreFunc storeFunc;
     Mat *matD = &D, tmat;
+    int tmat_size = 0;
     const uchar* Cdata = C.data;
     size_t Cstep = C.data ? (size_t)C.step : 0;
     AutoBuffer<uchar> buf;
@@ -1045,8 +1134,8 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
 
     if( D.data == A.data || D.data == B.data )
     {
-        buf.allocate(d_size.width*d_size.height*CV_ELEM_SIZE(type));
-        tmat = Mat(d_size.height, d_size.width, type, (uchar*)buf );
+        tmat_size = d_size.width*d_size.height*CV_ELEM_SIZE(type);
+        // Allocate tmat later, once the size of buf is known
         matD = &tmat;
     }
 
@@ -1123,8 +1212,12 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
         (d_size.width <= block_lin_size &&
         d_size.height <= block_lin_size && len <= block_lin_size) )
     {
-        singleMulFunc( A.data, A.step, B.data, b_step, Cdata, Cstep,
-                       matD->data, matD->step, a_size, d_size, alpha, beta, flags );
+        if( tmat_size > 0 ) {
+            buf.allocate(tmat_size);
+            tmat = Mat(d_size.height, d_size.width, type, (uchar*)buf );
+        }
+        singleMulFunc( A.ptr(), A.step, B.ptr(), b_step, Cdata, Cstep,
+                       matD->ptr(), matD->step, a_size, d_size, alpha, beta, flags );
     }
     else
     {
@@ -1151,7 +1244,7 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
         else
             b_step0 = elem_size, b_step1 = b_step;
 
-        if( !C.data )
+        if( C.empty() )
         {
             c_step0 = c_step1 = 0;
             flags &= ~GEMM_3_T;
@@ -1182,12 +1275,14 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
             flags &= ~GEMM_1_T;
         }
 
-        buf.allocate(a_buf_size + b_buf_size + d_buf_size);
+        buf.allocate(d_buf_size + b_buf_size + a_buf_size + tmat_size);
         d_buf = (uchar*)buf;
         b_buf = d_buf + d_buf_size;
 
         if( is_a_t )
             a_buf = b_buf + b_buf_size;
+        if( tmat_size > 0 )
+            tmat = Mat(d_size.height, d_size.width, type, b_buf + b_buf_size + a_buf_size );
 
         for( i = 0; i < d_size.height; i += di )
         {
@@ -1197,7 +1292,7 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
 
             for( j = 0; j < d_size.width; j += dj )
             {
-                uchar* _d = matD->data + i*matD->step + j*elem_size;
+                uchar* _d = matD->ptr() + i*matD->step + j*elem_size;
                 const uchar* _c = Cdata + i*c_step0 + j*c_step1;
                 size_t _d_step = matD->step;
                 dj = dn0;
@@ -1214,9 +1309,9 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
 
                 for( k = 0; k < len; k += dk )
                 {
-                    const uchar* _a = A.data + i*a_step0 + k*a_step1;
+                    const uchar* _a = A.ptr() + i*a_step0 + k*a_step1;
                     size_t _a_step = A.step;
-                    const uchar* _b = B.data + k*b_step0 + j*b_step1;
+                    const uchar* _b = B.ptr() + k*b_step0 + j*b_step1;
                     size_t _b_step = b_step;
                     Size a_bl_size;
 
@@ -1261,7 +1356,7 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
 
                 if( dk0 < len )
                     storeFunc( _c, Cstep, _d, _d_step,
-                               matD->data + i*matD->step + j*elem_size,
+                               matD->ptr(i) + j*elem_size,
                                matD->step, Size(dj,di), alpha, beta, flags );
             }
         }
@@ -1770,7 +1865,7 @@ void cv::transform( InputArray _src, OutputArray _dst, InputArray _mtx )
         _mbuf.allocate(dcn*(scn+1));
         mbuf = (double*)_mbuf;
         Mat tmp(dcn, scn+1, mtype, mbuf);
-        memset(tmp.data, 0, tmp.total()*tmp.elemSize());
+        memset(tmp.ptr(), 0, tmp.total()*tmp.elemSize());
         if( m.cols == scn+1 )
             m.convertTo(tmp, mtype);
         else
@@ -1781,7 +1876,7 @@ void cv::transform( InputArray _src, OutputArray _dst, InputArray _mtx )
         m = tmp;
     }
     else
-        mbuf = (double*)m.data;
+        mbuf = m.ptr<double>();
 
     if( scn == dcn )
     {
@@ -1933,7 +2028,8 @@ void cv::perspectiveTransform( InputArray _src, OutputArray _dst, InputArray _mt
 {
     Mat src = _src.getMat(), m = _mtx.getMat();
     int depth = src.depth(), scn = src.channels(), dcn = m.rows-1;
-    CV_Assert( scn + 1 == m.cols && (depth == CV_32F || depth == CV_64F));
+    CV_Assert( scn + 1 == m.cols );
+    CV_Assert( depth == CV_32F || depth == CV_64F );
 
     _dst.create( src.size(), CV_MAKETYPE(depth, dcn) );
     Mat dst = _dst.getMat();
@@ -1950,7 +2046,7 @@ void cv::perspectiveTransform( InputArray _src, OutputArray _dst, InputArray _mt
         m = tmp;
     }
     else
-        mbuf = (double*)m.data;
+        mbuf = m.ptr<double>();
 
     TransformFunc func = depth == CV_32F ?
         (TransformFunc)perspectiveTransform_32f :
@@ -2004,6 +2100,16 @@ static void scaleAdd_32f(const float* src1, const float* src2, float* dst,
                 _mm_storeu_ps(dst + i, t0);
                 _mm_storeu_ps(dst + i + 4, t1);
             }
+    }
+    else
+#elif CV_NEON
+    if (true)
+    {
+        for ( ; i <= len - 4; i += 4)
+        {
+            float32x4_t v_src1 = vld1q_f32(src1 + i), v_src2 = vld1q_f32(src2 + i);
+            vst1q_f32(dst + i, vaddq_f32(vmulq_n_f32(v_src1, alpha), v_src2));
+        }
     }
     else
 #endif
@@ -2062,21 +2168,72 @@ static void scaleAdd_64f(const double* src1, const double* src2, double* dst,
 
 typedef void (*ScaleAddFunc)(const uchar* src1, const uchar* src2, uchar* dst, int len, const void* alpha);
 
+#ifdef HAVE_OPENCL
+
+static bool ocl_scaleAdd( InputArray _src1, double alpha, InputArray _src2, OutputArray _dst, int type )
+{
+    const ocl::Device & d = ocl::Device::getDefault();
+    int depth = CV_MAT_DEPTH(type), cn = CV_MAT_CN(type), wdepth = std::max(depth, CV_32F),
+            kercn = ocl::predictOptimalVectorWidth(_src1, _src2, _dst), rowsPerWI = d.isIntel() ? 4 : 1;
+    bool doubleSupport = d.doubleFPConfig() > 0;
+    Size size = _src1.size();
+
+    if ( (!doubleSupport && depth == CV_64F) || size != _src2.size() )
+        return false;
+
+    char cvt[2][50];
+    ocl::Kernel k("KF", ocl::core::arithm_oclsrc,
+                  format("-D OP_SCALE_ADD -D BINARY_OP -D dstT=%s -D workT=%s -D convertToWT1=%s"
+                         " -D srcT1=dstT -D srcT2=dstT -D convertToDT=%s -D workT1=%s"
+                         " -D wdepth=%d%s -D rowsPerWI=%d",
+                         ocl::typeToStr(CV_MAKE_TYPE(depth, kercn)),
+                         ocl::typeToStr(CV_MAKE_TYPE(wdepth, kercn)),
+                         ocl::convertTypeStr(depth, wdepth, kercn, cvt[0]),
+                         ocl::convertTypeStr(wdepth, depth, kercn, cvt[1]),
+                         ocl::typeToStr(wdepth), wdepth,
+                         doubleSupport ? " -D DOUBLE_SUPPORT" : "", rowsPerWI));
+    if (k.empty())
+        return false;
+
+    UMat src1 = _src1.getUMat(), src2 = _src2.getUMat();
+    _dst.create(size, type);
+    UMat dst = _dst.getUMat();
+
+    ocl::KernelArg src1arg = ocl::KernelArg::ReadOnlyNoSize(src1),
+            src2arg = ocl::KernelArg::ReadOnlyNoSize(src2),
+            dstarg = ocl::KernelArg::WriteOnly(dst, cn, kercn);
+
+    if (wdepth == CV_32F)
+        k.args(src1arg, src2arg, dstarg, (float)alpha);
+    else
+        k.args(src1arg, src2arg, dstarg, alpha);
+
+    size_t globalsize[2] = { dst.cols * cn / kercn, (dst.rows + rowsPerWI - 1) / rowsPerWI };
+    return k.run(2, globalsize, NULL, false);
+}
+
+#endif
+
 }
 
 void cv::scaleAdd( InputArray _src1, double alpha, InputArray _src2, OutputArray _dst )
 {
-    Mat src1 = _src1.getMat(), src2 = _src2.getMat();
-    int depth = src1.depth(), cn = src1.channels();
+    int type = _src1.type(), depth = CV_MAT_DEPTH(type), cn = CV_MAT_CN(type);
+    CV_Assert( type == _src2.type() );
 
-    CV_Assert( src1.type() == src2.type() );
+    CV_OCL_RUN(_src1.dims() <= 2 && _src2.dims() <= 2 && _dst.isUMat(),
+            ocl_scaleAdd(_src1, alpha, _src2, _dst, type))
+
     if( depth < CV_32F )
     {
         addWeighted(_src1, alpha, _src2, 1, 0, _dst, depth);
         return;
     }
 
-    _dst.create(src1.dims, src1.size, src1.type());
+    Mat src1 = _src1.getMat(), src2 = _src2.getMat();
+    CV_Assert(src1.size == src2.size);
+
+    _dst.create(src1.dims, src1.size, type);
     Mat dst = _dst.getMat();
 
     float falpha = (float)alpha;
@@ -2084,10 +2241,10 @@ void cv::scaleAdd( InputArray _src1, double alpha, InputArray _src2, OutputArray
 
     ScaleAddFunc func = depth == CV_32F ? (ScaleAddFunc)scaleAdd_32f : (ScaleAddFunc)scaleAdd_64f;
 
-    if( src1.isContinuous() && src2.isContinuous() && dst.isContinuous() )
+    if (src1.isContinuous() && src2.isContinuous() && dst.isContinuous())
     {
         size_t len = src1.total()*cn;
-        func(src1.data, src2.data, dst.data, (int)len, palpha);
+        func(src1.ptr(), src2.ptr(), dst.ptr(), (int)len, palpha);
         return;
     }
 
@@ -2131,7 +2288,7 @@ void cv::calcCovarMatrix( const Mat* data, int nsamples, Mat& covar, Mat& _mean,
     {
         CV_Assert( data[i].size() == size && data[i].type() == type );
         if( data[i].isContinuous() )
-            memcpy( _data.ptr(i), data[i].data, sz*esz );
+            memcpy( _data.ptr(i), data[i].ptr(), sz*esz );
         else
         {
             Mat dataRow(size.height, size.width, type, _data.ptr(i));
@@ -2252,12 +2409,12 @@ double cv::Mahalanobis( InputArray _v1, InputArray _v2, InputArray _icovar )
 
     if( depth == CV_32F )
     {
-        const float* src1 = (const float*)v1.data;
-        const float* src2 = (const float*)v2.data;
+        const float* src1 = v1.ptr<float>();
+        const float* src2 = v2.ptr<float>();
         size_t step1 = v1.step/sizeof(src1[0]);
         size_t step2 = v2.step/sizeof(src2[0]);
         double* diff = buf;
-        const float* mat = (const float*)icovar.data;
+        const float* mat = icovar.ptr<float>();
         size_t matstep = icovar.step/sizeof(mat[0]);
 
         for( ; sz.height--; src1 += step1, src2 += step2, diff += sz.width )
@@ -2283,12 +2440,12 @@ double cv::Mahalanobis( InputArray _v1, InputArray _v2, InputArray _icovar )
     }
     else if( depth == CV_64F )
     {
-        const double* src1 = (const double*)v1.data;
-        const double* src2 = (const double*)v2.data;
+        const double* src1 = v1.ptr<double>();
+        const double* src2 = v2.ptr<double>();
         size_t step1 = v1.step/sizeof(src1[0]);
         size_t step2 = v2.step/sizeof(src2[0]);
         double* diff = buf;
-        const double* mat = (const double*)icovar.data;
+        const double* mat = icovar.ptr<double>();
         size_t matstep = icovar.step/sizeof(mat[0]);
 
         for( ; sz.height--; src1 += step1, src2 += step2, diff += sz.width )
@@ -2329,9 +2486,9 @@ template<typename sT, typename dT> static void
 MulTransposedR( const Mat& srcmat, Mat& dstmat, const Mat& deltamat, double scale )
 {
     int i, j, k;
-    const sT* src = (const sT*)srcmat.data;
-    dT* dst = (dT*)dstmat.data;
-    const dT* delta = (const dT*)deltamat.data;
+    const sT* src = srcmat.ptr<sT>();
+    dT* dst = dstmat.ptr<dT>();
+    const dT* delta = deltamat.ptr<dT>();
     size_t srcstep = srcmat.step/sizeof(src[0]);
     size_t dststep = dstmat.step/sizeof(dst[0]);
     size_t deltastep = deltamat.rows > 1 ? deltamat.step/sizeof(delta[0]) : 0;
@@ -2448,9 +2605,9 @@ template<typename sT, typename dT> static void
 MulTransposedL( const Mat& srcmat, Mat& dstmat, const Mat& deltamat, double scale )
 {
     int i, j, k;
-    const sT* src = (const sT*)srcmat.data;
-    dT* dst = (dT*)dstmat.data;
-    const dT* delta = (const dT*)deltamat.data;
+    const sT* src = srcmat.ptr<sT>();
+    dT* dst = dstmat.ptr<dT>();
+    const dT* delta = deltamat.ptr<dT>();
     size_t srcstep = srcmat.step/sizeof(src[0]);
     size_t dststep = dstmat.step/sizeof(dst[0]);
     size_t deltastep = deltamat.rows > 1 ? deltamat.step/sizeof(delta[0]) : 0;
@@ -2529,7 +2686,7 @@ void cv::mulTransposed( InputArray _src, OutputArray _dst, bool ata,
     dtype = std::max(std::max(CV_MAT_DEPTH(dtype >= 0 ? dtype : stype), delta.depth()), CV_32F);
     CV_Assert( src.channels() == 1 );
 
-    if( delta.data )
+    if( !delta.empty() )
     {
         CV_Assert( delta.channels() == 1 &&
             (delta.rows == src.rows || delta.rows == 1) &&
@@ -2548,7 +2705,7 @@ void cv::mulTransposed( InputArray _src, OutputArray _dst, bool ata,
     {
         Mat src2;
         const Mat* tsrc = &src;
-        if( delta.data )
+        if( !delta.empty() )
         {
             if( delta.size() == src.size() )
                 subtract( src, delta, src2 );
@@ -2662,12 +2819,13 @@ dotProd_(const T* src1, const T* src2, int len)
 static double dotProd_8u(const uchar* src1, const uchar* src2, int len)
 {
     double r = 0;
-#if ARITHM_USE_IPP
-    ippiDotProd_8u64f_C1R(src1, (int)(len*sizeof(src1[0])),
-                          src2, (int)(len*sizeof(src2[0])),
-                          ippiSize(len, 1), &r);
-    return r;
-#else
+#if ARITHM_USE_IPP && 0
+    if (0 <= ippiDotProd_8u64f_C1R(src1, (int)(len*sizeof(src1[0])),
+                                   src2, (int)(len*sizeof(src2[0])),
+                                   ippiSize(len, 1), &r))
+        return r;
+    setIppErrorStatus();
+#endif
     int i = 0;
 
 #if CV_SSE2
@@ -2713,7 +2871,6 @@ static double dotProd_8u(const uchar* src1, const uchar* src2, int len)
     }
 #endif
     return r + dotProd_(src1, src2, len - i);
-#endif
 }
 
 
@@ -2724,48 +2881,57 @@ static double dotProd_8s(const schar* src1, const schar* src2, int len)
 
 static double dotProd_16u(const ushort* src1, const ushort* src2, int len)
 {
+#if (ARITHM_USE_IPP == 1)
     double r = 0;
-    IF_IPP(ippiDotProd_16u64f_C1R(src1, (int)(len*sizeof(src1[0])),
-                                  src2, (int)(len*sizeof(src2[0])),
-                                  ippiSize(len, 1), &r),
-           r = dotProd_(src1, src2, len));
-    return r;
+    if (0 <= ippiDotProd_16u64f_C1R(src1, (int)(len*sizeof(src1[0])), src2, (int)(len*sizeof(src2[0])), ippiSize(len, 1), &r))
+        return r;
+    setIppErrorStatus();
+#endif
+    return dotProd_(src1, src2, len);
 }
 
 static double dotProd_16s(const short* src1, const short* src2, int len)
 {
+#if (ARITHM_USE_IPP == 1)
     double r = 0;
-    IF_IPP(ippiDotProd_16s64f_C1R(src1, (int)(len*sizeof(src1[0])),
-                                  src2, (int)(len*sizeof(src2[0])),
-                                  ippiSize(len, 1), &r),
-           r = dotProd_(src1, src2, len));
-    return r;
+    if (0 <= ippiDotProd_16s64f_C1R(src1, (int)(len*sizeof(src1[0])), src2, (int)(len*sizeof(src2[0])), ippiSize(len, 1), &r))
+        return r;
+    setIppErrorStatus();
+#endif
+    return dotProd_(src1, src2, len);
 }
 
 static double dotProd_32s(const int* src1, const int* src2, int len)
 {
+#if (ARITHM_USE_IPP == 1)
     double r = 0;
-    IF_IPP(ippiDotProd_32s64f_C1R(src1, (int)(len*sizeof(src1[0])),
-                                  src2, (int)(len*sizeof(src2[0])),
-                                  ippiSize(len, 1), &r),
-           r = dotProd_(src1, src2, len));
-    return r;
+    if (0 <= ippiDotProd_32s64f_C1R(src1, (int)(len*sizeof(src1[0])), src2, (int)(len*sizeof(src2[0])), ippiSize(len, 1), &r))
+        return r;
+    setIppErrorStatus();
+#endif
+    return dotProd_(src1, src2, len);
 }
 
 static double dotProd_32f(const float* src1, const float* src2, int len)
 {
+#if (ARITHM_USE_IPP == 1)
     double r = 0;
-    IF_IPP(ippsDotProd_32f64f(src1, src2, len, &r),
-           r = dotProd_(src1, src2, len));
-    return r;
+    if (0 <= ippsDotProd_32f64f(src1, src2, len, &r))
+        return r;
+    setIppErrorStatus();
+#endif
+    return dotProd_(src1, src2, len);
 }
 
 static double dotProd_64f(const double* src1, const double* src2, int len)
 {
+#if (ARITHM_USE_IPP == 1)
     double r = 0;
-    IF_IPP(ippsDotProd_64f(src1, src2, len, &r),
-           r = dotProd_(src1, src2, len));
-    return r;
+    if (0 <= ippsDotProd_64f(src1, src2, len, &r))
+        return r;
+    setIppErrorStatus();
+#endif
+    return dotProd_(src1, src2, len);
 }
 
 
@@ -2810,343 +2976,7 @@ double Mat::dot(InputArray _mat) const
     return r;
 }
 
-/****************************************************************************************\
-*                                          PCA                                           *
-\****************************************************************************************/
-
-PCA::PCA() {}
-
-PCA::PCA(InputArray data, InputArray _mean, int flags, int maxComponents)
-{
-    operator()(data, _mean, flags, maxComponents);
 }
-
-PCA::PCA(InputArray data, InputArray _mean, int flags, double retainedVariance)
-{
-    operator()(data, _mean, flags, retainedVariance);
-}
-
-PCA& PCA::operator()(InputArray _data, InputArray __mean, int flags, int maxComponents)
-{
-    Mat data = _data.getMat(), _mean = __mean.getMat();
-    int covar_flags = CV_COVAR_SCALE;
-    int i, len, in_count;
-    Size mean_sz;
-
-    CV_Assert( data.channels() == 1 );
-    if( flags & CV_PCA_DATA_AS_COL )
-    {
-        len = data.rows;
-        in_count = data.cols;
-        covar_flags |= CV_COVAR_COLS;
-        mean_sz = Size(1, len);
-    }
-    else
-    {
-        len = data.cols;
-        in_count = data.rows;
-        covar_flags |= CV_COVAR_ROWS;
-        mean_sz = Size(len, 1);
-    }
-
-    int count = std::min(len, in_count), out_count = count;
-    if( maxComponents > 0 )
-        out_count = std::min(count, maxComponents);
-
-    // "scrambled" way to compute PCA (when cols(A)>rows(A)):
-    // B = A'A; B*x=b*x; C = AA'; C*y=c*y -> AA'*y=c*y -> A'A*(A'*y)=c*(A'*y) -> c = b, x=A'*y
-    if( len <= in_count )
-        covar_flags |= CV_COVAR_NORMAL;
-
-    int ctype = std::max(CV_32F, data.depth());
-    mean.create( mean_sz, ctype );
-
-    Mat covar( count, count, ctype );
-
-    if( _mean.data )
-    {
-        CV_Assert( _mean.size() == mean_sz );
-        _mean.convertTo(mean, ctype);
-        covar_flags |= CV_COVAR_USE_AVG;
-    }
-
-    calcCovarMatrix( data, covar, mean, covar_flags, ctype );
-    eigen( covar, eigenvalues, eigenvectors );
-
-    if( !(covar_flags & CV_COVAR_NORMAL) )
-    {
-        // CV_PCA_DATA_AS_ROW: cols(A)>rows(A). x=A'*y -> x'=y'*A
-        // CV_PCA_DATA_AS_COL: rows(A)>cols(A). x=A''*y -> x'=y'*A'
-        Mat tmp_data, tmp_mean = repeat(mean, data.rows/mean.rows, data.cols/mean.cols);
-        if( data.type() != ctype || tmp_mean.data == mean.data )
-        {
-            data.convertTo( tmp_data, ctype );
-            subtract( tmp_data, tmp_mean, tmp_data );
-        }
-        else
-        {
-            subtract( data, tmp_mean, tmp_mean );
-            tmp_data = tmp_mean;
-        }
-
-        Mat evects1(count, len, ctype);
-        gemm( eigenvectors, tmp_data, 1, Mat(), 0, evects1,
-            (flags & CV_PCA_DATA_AS_COL) ? CV_GEMM_B_T : 0);
-        eigenvectors = evects1;
-
-        // normalize eigenvectors
-        for( i = 0; i < out_count; i++ )
-        {
-            Mat vec = eigenvectors.row(i);
-            normalize(vec, vec);
-        }
-    }
-
-    if( count > out_count )
-    {
-        // use clone() to physically copy the data and thus deallocate the original matrices
-        eigenvalues = eigenvalues.rowRange(0,out_count).clone();
-        eigenvectors = eigenvectors.rowRange(0,out_count).clone();
-    }
-    return *this;
-}
-
-void PCA::write(FileStorage& fs ) const
-{
-    CV_Assert( fs.isOpened() );
-
-    fs << "name" << "PCA";
-    fs << "vectors" << eigenvectors;
-    fs << "values" << eigenvalues;
-    fs << "mean" << mean;
-}
-
-void PCA::read(const FileNode& fs)
-{
-    CV_Assert( !fs.empty() );
-    String name = (String)fs["name"];
-    CV_Assert( name == "PCA" );
-
-    cv::read(fs["vectors"], eigenvectors);
-    cv::read(fs["values"], eigenvalues);
-    cv::read(fs["mean"], mean);
-}
-
-template <typename T>
-int computeCumulativeEnergy(const Mat& eigenvalues, double retainedVariance)
-{
-    CV_DbgAssert( eigenvalues.type() == DataType<T>::type );
-
-    Mat g(eigenvalues.size(), DataType<T>::type);
-
-    for(int ig = 0; ig < g.rows; ig++)
-    {
-        g.at<T>(ig, 0) = 0;
-        for(int im = 0; im <= ig; im++)
-        {
-            g.at<T>(ig,0) += eigenvalues.at<T>(im,0);
-        }
-    }
-
-    int L;
-
-    for(L = 0; L < eigenvalues.rows; L++)
-    {
-        double energy = g.at<T>(L, 0) / g.at<T>(g.rows - 1, 0);
-        if(energy > retainedVariance)
-            break;
-    }
-
-    L = std::max(2, L);
-
-    return L;
-}
-
-PCA& PCA::operator()(InputArray _data, InputArray __mean, int flags, double retainedVariance)
-{
-    Mat data = _data.getMat(), _mean = __mean.getMat();
-    int covar_flags = CV_COVAR_SCALE;
-    int i, len, in_count;
-    Size mean_sz;
-
-    CV_Assert( data.channels() == 1 );
-    if( flags & CV_PCA_DATA_AS_COL )
-    {
-        len = data.rows;
-        in_count = data.cols;
-        covar_flags |= CV_COVAR_COLS;
-        mean_sz = Size(1, len);
-    }
-    else
-    {
-        len = data.cols;
-        in_count = data.rows;
-        covar_flags |= CV_COVAR_ROWS;
-        mean_sz = Size(len, 1);
-    }
-
-    CV_Assert( retainedVariance > 0 && retainedVariance <= 1 );
-
-    int count = std::min(len, in_count);
-
-    // "scrambled" way to compute PCA (when cols(A)>rows(A)):
-    // B = A'A; B*x=b*x; C = AA'; C*y=c*y -> AA'*y=c*y -> A'A*(A'*y)=c*(A'*y) -> c = b, x=A'*y
-    if( len <= in_count )
-        covar_flags |= CV_COVAR_NORMAL;
-
-    int ctype = std::max(CV_32F, data.depth());
-    mean.create( mean_sz, ctype );
-
-    Mat covar( count, count, ctype );
-
-    if( _mean.data )
-    {
-        CV_Assert( _mean.size() == mean_sz );
-        _mean.convertTo(mean, ctype);
-    }
-
-    calcCovarMatrix( data, covar, mean, covar_flags, ctype );
-    eigen( covar, eigenvalues, eigenvectors );
-
-    if( !(covar_flags & CV_COVAR_NORMAL) )
-    {
-        // CV_PCA_DATA_AS_ROW: cols(A)>rows(A). x=A'*y -> x'=y'*A
-        // CV_PCA_DATA_AS_COL: rows(A)>cols(A). x=A''*y -> x'=y'*A'
-        Mat tmp_data, tmp_mean = repeat(mean, data.rows/mean.rows, data.cols/mean.cols);
-        if( data.type() != ctype || tmp_mean.data == mean.data )
-        {
-            data.convertTo( tmp_data, ctype );
-            subtract( tmp_data, tmp_mean, tmp_data );
-        }
-        else
-        {
-            subtract( data, tmp_mean, tmp_mean );
-            tmp_data = tmp_mean;
-        }
-
-        Mat evects1(count, len, ctype);
-        gemm( eigenvectors, tmp_data, 1, Mat(), 0, evects1,
-            (flags & CV_PCA_DATA_AS_COL) ? CV_GEMM_B_T : 0);
-        eigenvectors = evects1;
-
-        // normalize all eigenvectors
-        for( i = 0; i < eigenvectors.rows; i++ )
-        {
-            Mat vec = eigenvectors.row(i);
-            normalize(vec, vec);
-        }
-    }
-
-    // compute the cumulative energy content for each eigenvector
-    int L;
-    if (ctype == CV_32F)
-        L = computeCumulativeEnergy<float>(eigenvalues, retainedVariance);
-    else
-        L = computeCumulativeEnergy<double>(eigenvalues, retainedVariance);
-
-    // use clone() to physically copy the data and thus deallocate the original matrices
-    eigenvalues = eigenvalues.rowRange(0,L).clone();
-    eigenvectors = eigenvectors.rowRange(0,L).clone();
-
-    return *this;
-}
-
-void PCA::project(InputArray _data, OutputArray result) const
-{
-    Mat data = _data.getMat();
-    CV_Assert( mean.data && eigenvectors.data &&
-        ((mean.rows == 1 && mean.cols == data.cols) || (mean.cols == 1 && mean.rows == data.rows)));
-    Mat tmp_data, tmp_mean = repeat(mean, data.rows/mean.rows, data.cols/mean.cols);
-    int ctype = mean.type();
-    if( data.type() != ctype || tmp_mean.data == mean.data )
-    {
-        data.convertTo( tmp_data, ctype );
-        subtract( tmp_data, tmp_mean, tmp_data );
-    }
-    else
-    {
-        subtract( data, tmp_mean, tmp_mean );
-        tmp_data = tmp_mean;
-    }
-    if( mean.rows == 1 )
-        gemm( tmp_data, eigenvectors, 1, Mat(), 0, result, GEMM_2_T );
-    else
-        gemm( eigenvectors, tmp_data, 1, Mat(), 0, result, 0 );
-}
-
-Mat PCA::project(InputArray data) const
-{
-    Mat result;
-    project(data, result);
-    return result;
-}
-
-void PCA::backProject(InputArray _data, OutputArray result) const
-{
-    Mat data = _data.getMat();
-    CV_Assert( mean.data && eigenvectors.data &&
-        ((mean.rows == 1 && eigenvectors.rows == data.cols) ||
-         (mean.cols == 1 && eigenvectors.rows == data.rows)));
-
-    Mat tmp_data, tmp_mean;
-    data.convertTo(tmp_data, mean.type());
-    if( mean.rows == 1 )
-    {
-        tmp_mean = repeat(mean, data.rows, 1);
-        gemm( tmp_data, eigenvectors, 1, tmp_mean, 1, result, 0 );
-    }
-    else
-    {
-        tmp_mean = repeat(mean, 1, data.cols);
-        gemm( eigenvectors, tmp_data, 1, tmp_mean, 1, result, GEMM_1_T );
-    }
-}
-
-Mat PCA::backProject(InputArray data) const
-{
-    Mat result;
-    backProject(data, result);
-    return result;
-}
-
-}
-
-void cv::PCACompute(InputArray data, InputOutputArray mean,
-                    OutputArray eigenvectors, int maxComponents)
-{
-    PCA pca;
-    pca(data, mean, 0, maxComponents);
-    pca.mean.copyTo(mean);
-    pca.eigenvectors.copyTo(eigenvectors);
-}
-
-void cv::PCACompute(InputArray data, InputOutputArray mean,
-                    OutputArray eigenvectors, double retainedVariance)
-{
-    PCA pca;
-    pca(data, mean, 0, retainedVariance);
-    pca.mean.copyTo(mean);
-    pca.eigenvectors.copyTo(eigenvectors);
-}
-
-void cv::PCAProject(InputArray data, InputArray mean,
-                    InputArray eigenvectors, OutputArray result)
-{
-    PCA pca;
-    pca.mean = mean.getMat();
-    pca.eigenvectors = eigenvectors.getMat();
-    pca.project(data, result);
-}
-
-void cv::PCABackProject(InputArray data, InputArray mean,
-                    InputArray eigenvectors, OutputArray result)
-{
-    PCA pca;
-    pca.mean = mean.getMat();
-    pca.eigenvectors = eigenvectors.getMat();
-    pca.backProject(data, result);
-}
-
 
 /****************************************************************************************\
 *                                    Earlier API                                         *
@@ -3279,7 +3109,7 @@ cvCalcPCA( const CvArr* data_arr, CvArr* avg_arr, CvArr* eigenvals, CvArr* eigen
     pca.eigenvectors = evects;
 
     pca(data, (flags & CV_PCA_USE_AVG) ? mean : cv::Mat(),
-        flags, evals.data ? evals.rows + evals.cols - 1 : 0);
+        flags, !evals.empty() ? evals.rows + evals.cols - 1 : 0);
 
     if( pca.mean.size() == mean.size() )
         pca.mean.convertTo( mean, mean.type() );

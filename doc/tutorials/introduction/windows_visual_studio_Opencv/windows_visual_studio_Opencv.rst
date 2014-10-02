@@ -90,17 +90,24 @@ A full list, for the latest version would contain:
 
 .. code-block:: bash
 
-   opencv_core231d.lib
-   opencv_imgproc231d.lib
-   opencv_highgui231d.lib
-   opencv_ml231d.lib
-   opencv_video231d.lib
-   opencv_features2d231d.lib
-   opencv_calib3d231d.lib
-   opencv_objdetect231d.lib
-   opencv_contrib231d.lib
-   opencv_legacy231d.lib
-   opencv_flann231d.lib
+   opencv_calib3d300d.lib
+   opencv_core300d.lib
+   opencv_features2d300d.lib
+   opencv_flann300d.lib
+   opencv_highgui300d.lib
+   opencv_imgcodecs300d.lib
+   opencv_imgproc300d.lib
+   opencv_ml300d.lib
+   opencv_objdetect300d.lib
+   opencv_photo300d.lib
+   opencv_shape300d.lib
+   opencv_stitching300d.lib
+   opencv_superres300d.lib
+   opencv_ts300d.lib
+   opencv_video300d.lib
+   opencv_videoio300d.lib
+   opencv_videostab300d.lib
+
 
 The letter *d* at the end just indicates that these are the libraries required for the debug. Now click ok to save and do the same with a new property inside the Release rule section. Make sure to omit the *d* letters from the library names and to save the property sheets with the save icon above them.
 
@@ -142,9 +149,9 @@ The process is the same as described in case of the local approach. Just add the
 Test it!
 ========
 
-Now to try this out download our little test :download:`source code <../../../../samples/cpp/tutorial_code/introduction/windows_visual_studio_Opencv/Test.cpp>` or get it from the sample code folder of the OpenCV sources. Add this to your project and build it. Here's its content:
+Now to try this out download our little test :download:`source code <../../../../samples/cpp/tutorial_code/introduction/windows_visual_studio_Opencv/introduction_windows_vs.cpp>` or get it from the sample code folder of the OpenCV sources. Add this to your project and build it. Here's its content:
 
-.. literalinclude:: ../../../../samples/cpp/tutorial_code/introduction/windows_visual_studio_Opencv/Test.cpp
+.. literalinclude:: ../../../../samples/cpp/tutorial_code/introduction/windows_visual_studio_Opencv/introduction_windows_vs.cpp
    :language: cpp
    :tab-width: 4
    :linenos:

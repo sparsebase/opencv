@@ -2,13 +2,13 @@
 
 #include "opencv2/opencv_modules.hpp"
 
-#ifdef HAVE_OPENCV_NONFREE
+#ifdef HAVE_OPENCV_XFEATURES2D
 
 #include "opencv2/core/core.hpp"
 #include "opencv2/features2d/features2d.hpp"
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/cudafeatures2d.hpp"
-#include "opencv2/nonfree/cuda.hpp"
+#include "opencv2/xfeatures2d/cuda.hpp"
 
 using namespace std;
 using namespace cv;
@@ -62,7 +62,7 @@ int main(int argc, char* argv[])
     cout << "FOUND " << keypoints2GPU.cols << " keypoints on second image" << endl;
 
     // matching descriptors
-    BFMatcher_CUDA matcher(NORM_L2);
+    BFMatcher_CUDA matcher(surf.defaultNorm());
     GpuMat trainIdx, distance;
     matcher.matchSingle(descriptors1GPU, descriptors2GPU, trainIdx, distance);
 
@@ -91,7 +91,7 @@ int main(int argc, char* argv[])
 
 int main()
 {
-    std::cerr << "OpenCV was built without nonfree module" << std::endl;
+    std::cerr << "OpenCV was built without xfeatures2d module" << std::endl;
     return 0;
 }
 

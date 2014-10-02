@@ -46,6 +46,7 @@
 using namespace cv;
 using namespace cv::cuda;
 
+#ifdef HAVE_CUDA
 namespace
 {
     size_t alignUpStep(size_t what, size_t alignment)
@@ -56,6 +57,7 @@ namespace
         return res;
     }
 }
+#endif
 
 void cv::cuda::CudaMem::create(int rows_, int cols_, int type_)
 {
@@ -173,7 +175,7 @@ void cv::cuda::CudaMem::release()
         fastFree(refcount);
     }
 
-    data = datastart = dataend = 0;
+    dataend = data = datastart = 0;
     step = rows = cols = 0;
     refcount = 0;
 #endif

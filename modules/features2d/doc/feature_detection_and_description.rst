@@ -11,8 +11,8 @@ FAST
 ----
 Detects corners using the FAST algorithm
 
-.. ocv:function:: void FAST( InputArray image, vector<KeyPoint>& keypoints, int threshold, bool nonmaxSupression=true )
-.. ocv:function:: void FAST( InputArray image, vector<KeyPoint>& keypoints, int threshold, bool nonmaxSupression, int type )
+.. ocv:function:: void FAST( InputArray image, vector<KeyPoint>& keypoints, int threshold, bool nonmaxSuppression=true )
+.. ocv:function:: void FAST( InputArray image, vector<KeyPoint>& keypoints, int threshold, bool nonmaxSuppression, int type )
 
 .. ocv:pyfunction:: cv2.FastFeatureDetector([, threshold[, nonmaxSuppression]]) -> <FastFeatureDetector object>
 .. ocv:pyfunction:: cv2.FastFeatureDetector(threshold, nonmaxSuppression, type) -> <FastFeatureDetector object>
@@ -25,17 +25,16 @@ Detects corners using the FAST algorithm
 
     :param threshold: threshold on difference between intensity of the central pixel and pixels of a circle around this pixel.
 
-    :param nonmaxSupression: if true, non-maximum suppression is applied to detected corners (keypoints).
+    :param nonmaxSuppression: if true, non-maximum suppression is applied to detected corners (keypoints).
 
     :param type: one of the three neighborhoods as defined in the paper: ``FastFeatureDetector::TYPE_9_16``, ``FastFeatureDetector::TYPE_7_12``, ``FastFeatureDetector::TYPE_5_8``
 
 Detects corners using the FAST algorithm by [Rosten06]_.
 
-..note:: In Python API, types are given as ``cv2.FAST_FEATURE_DETECTOR_TYPE_5_8``, ``cv2.FAST_FEATURE_DETECTOR_TYPE_7_12`` and  ``cv2.FAST_FEATURE_DETECTOR_TYPE_9_16``. For corner detection, use ``cv2.FAST.detect()`` method.
+.. note:: In Python API, types are given as ``cv2.FAST_FEATURE_DETECTOR_TYPE_5_8``, ``cv2.FAST_FEATURE_DETECTOR_TYPE_7_12`` and  ``cv2.FAST_FEATURE_DETECTOR_TYPE_9_16``. For corner detection, use ``cv2.FAST.detect()`` method.
 
 
 .. [Rosten06] E. Rosten. Machine Learning for High-speed Corner Detection, 2006.
-
 
 MSER
 ----
@@ -182,39 +181,72 @@ Finds keypoints in an image and computes their descriptors
 
     :param useProvidedKeypoints: If it is true, then the method will use the provided vector of keypoints instead of detecting them.
 
-FREAK
+KAZE
+----
+.. ocv:class:: KAZE : public Feature2D
+
+Class implementing the KAZE keypoint detector and descriptor extractor, described in [ABD12]_. ::
+
+    class CV_EXPORTS_W KAZE : public Feature2D
+    {
+    public:
+        CV_WRAP KAZE();
+        CV_WRAP explicit KAZE(bool extended, bool upright, float threshold = 0.001f,
+                              int octaves = 4, int sublevels = 4, int diffusivity = DIFF_PM_G2);
+    };
+
+.. note:: AKAZE descriptor can only be used with KAZE or AKAZE keypoints
+
+.. [ABD12] KAZE Features. Pablo F. Alcantarilla, Adrien Bartoli and Andrew J. Davison. In European Conference on Computer Vision (ECCV), Fiorenze, Italy, October 2012.
+
+KAZE::KAZE
+----------
+The KAZE constructor
+
+.. ocv:function:: KAZE::KAZE(bool extended, bool upright, float threshold, int octaves, int sublevels, int diffusivity)
+
+    :param extended: Set to enable extraction of extended (128-byte) descriptor.
+    :param upright: Set to enable use of upright descriptors (non rotation-invariant).
+    :param threshold: Detector response threshold to accept point
+    :param octaves: Maximum octave evolution of the image
+    :param sublevels: Default number of sublevels per scale level
+    :param diffusivity: Diffusivity type. DIFF_PM_G1, DIFF_PM_G2, DIFF_WEICKERT or DIFF_CHARBONNIER
+
+AKAZE
 -----
-.. ocv:class:: FREAK : public DescriptorExtractor
+.. ocv:class:: AKAZE : public Feature2D
 
-Class implementing the FREAK (*Fast Retina Keypoint*) keypoint descriptor, described in [AOV12]_. The algorithm propose a novel keypoint descriptor inspired by the human visual system and more precisely the retina, coined Fast Retina Key- point (FREAK). A cascade of binary strings is computed by efficiently comparing image intensities over a retinal sampling pattern. FREAKs are in general faster to compute with lower memory load and also more robust than SIFT, SURF or BRISK. They are competitive alternatives to existing keypoints in particular for embedded applications.
+Class implementing the AKAZE keypoint detector and descriptor extractor, described in [ANB13]_. ::
 
-.. [AOV12] A. Alahi, R. Ortiz, and P. Vandergheynst. FREAK: Fast Retina Keypoint. In IEEE Conference on Computer Vision and Pattern Recognition, 2012. CVPR 2012 Open Source Award Winner.
+    class CV_EXPORTS_W AKAZE : public Feature2D
+    {
+    public:
+        CV_WRAP AKAZE();
+        CV_WRAP explicit AKAZE(int descriptor_type, int descriptor_size = 0, int descriptor_channels = 3,
+                               float threshold = 0.001f, int octaves = 4, int sublevels = 4, int diffusivity = DIFF_PM_G2);
+    };
 
-.. note::
+.. note:: AKAZE descriptors can only be used with KAZE or AKAZE keypoints. Try to avoid using *extract* and *detect* instead of *operator()* due to performance reasons.
 
-   * An example on how to use the FREAK descriptor can be found at opencv_source_code/samples/cpp/freak_demo.cpp
+.. [ANB13] Fast Explicit Diffusion for Accelerated Features in Nonlinear Scale Spaces. Pablo F. Alcantarilla, Jesús Nuevo and Adrien Bartoli. In British Machine Vision Conference (BMVC), Bristol, UK, September 2013.
 
-FREAK::FREAK
+AKAZE::AKAZE
 ------------
-The FREAK constructor
+The AKAZE constructor
 
-.. ocv:function:: FREAK::FREAK( bool orientationNormalized=true, bool scaleNormalized=true, float patternScale=22.0f, int nOctaves=4, const vector<int>& selectedPairs=vector<int>() )
+.. ocv:function:: AKAZE::AKAZE(int descriptor_type, int descriptor_size, int descriptor_channels, float threshold, int octaves, int sublevels, int diffusivity)
 
-    :param orientationNormalized: Enable orientation normalization.
-    :param scaleNormalized: Enable scale normalization.
-    :param patternScale: Scaling of the description pattern.
-    :param nOctaves: Number of octaves covered by the detected keypoints.
-    :param selectedPairs: (Optional) user defined selected pairs indexes,
+    :param descriptor_type: Type of the extracted descriptor: DESCRIPTOR_KAZE, DESCRIPTOR_KAZE_UPRIGHT, DESCRIPTOR_MLDB or DESCRIPTOR_MLDB_UPRIGHT.
+    :param descriptor_size: Size of the descriptor in bits. 0 -> Full size
+    :param descriptor_channels: Number of channels in the descriptor (1, 2, 3)
+    :param threshold: Detector response threshold to accept point
+    :param octaves: Maximum octave evolution of the image
+    :param sublevels: Default number of sublevels per scale level
+    :param diffusivity: Diffusivity type. DIFF_PM_G1, DIFF_PM_G2, DIFF_WEICKERT or DIFF_CHARBONNIER
 
-FREAK::selectPairs
-------------------
-Select the 512 best description pair indexes from an input (grayscale) image set. FREAK is available with a set of pairs learned off-line. Researchers can run a training process to learn their own set of pair. For more details read section 4.2 in: A. Alahi, R. Ortiz, and P. Vandergheynst. FREAK: Fast Retina Keypoint. In IEEE Conference on Computer Vision and Pattern Recognition, 2012.
+SIFT
+----
 
-We notice that for keypoint matching applications, image content has little effect on the selected pairs unless very specific what does matter is the detector type (blobs, corners,...) and the options used (scale/rotation invariance,...). Reduce corrThresh if not enough pairs are selected (43 points --> 903 possible pairs)
+.. ocv:class:: SIFT : public Feature2D
 
-.. ocv:function:: vector<int> FREAK::selectPairs(const vector<Mat>& images, vector<vector<KeyPoint> >& keypoints, const double corrThresh = 0.7, bool verbose = true)
-
-    :param images: Grayscale image input set.
-    :param keypoints: Set of detected keypoints
-    :param corrThresh: Correlation threshold.
-    :param verbose: Prints pair selection informations.
+The SIFT algorithm has been moved to opencv_contrib/xfeatures2d module.
