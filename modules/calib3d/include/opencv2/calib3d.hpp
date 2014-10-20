@@ -59,7 +59,9 @@ enum { LMEDS  = 4, //!< least-median algorithm
 enum { SOLVEPNP_ITERATIVE = 0,
        SOLVEPNP_EPNP      = 1, // F.Moreno-Noguer, V.Lepetit and P.Fua "EPnP: Efficient Perspective-n-Point Camera Pose Estimation"
        SOLVEPNP_P3P       = 2, // X.S. Gao, X.-R. Hou, J. Tang, H.-F. Chang; "Complete Solution Classification for the Perspective-Three-Point Problem"
-       SOLVEPNP_DLS       = 3  // Joel A. Hesch and Stergios I. Roumeliotis. "A Direct Least-Squares (DLS) Method for PnP"
+       SOLVEPNP_DLS       = 3, // Joel A. Hesch and Stergios I. Roumeliotis. "A Direct Least-Squares (DLS) Method for PnP"
+       SOLVEPNP_UPNP      = 4  // A.Penate-Sanchez, J.Andrade-Cetto, F.Moreno-Noguer. "Exhaustive Linearization for Robust Camera Pose and Focal Length Estimation"
+
 };
 
 enum { CALIB_CB_ADAPTIVE_THRESH = 1,
@@ -183,7 +185,7 @@ CV_EXPORTS_W void drawChessboardCorners( InputOutputArray image, Size patternSiz
 //! finds circles' grid pattern of the specified size in the image
 CV_EXPORTS_W bool findCirclesGrid( InputArray image, Size patternSize,
                                    OutputArray centers, int flags = CALIB_CB_SYMMETRIC_GRID,
-                                   const Ptr<FeatureDetector> &blobDetector = makePtr<SimpleBlobDetector>());
+                                   const Ptr<FeatureDetector> &blobDetector = SimpleBlobDetector::create());
 
 //! finds intrinsic and extrinsic camera parameters from several fews of a known calibration pattern.
 CV_EXPORTS_W double calibrateCamera( InputArrayOfArrays objectPoints,
@@ -384,17 +386,19 @@ public:
 
     CV_WRAP virtual Rect getROI2() const = 0;
     CV_WRAP virtual void setROI2(Rect roi2) = 0;
-};
 
-CV_EXPORTS_W Ptr<StereoBM> createStereoBM(int numDisparities = 0, int blockSize = 21);
+    CV_WRAP static Ptr<StereoBM> create(int numDisparities = 0, int blockSize = 21);
+};
 
 
 class CV_EXPORTS_W StereoSGBM : public StereoMatcher
 {
 public:
-    enum { MODE_SGBM = 0,
-           MODE_HH   = 1
-         };
+    enum
+    {
+        MODE_SGBM = 0,
+        MODE_HH   = 1
+    };
 
     CV_WRAP virtual int getPreFilterCap() const = 0;
     CV_WRAP virtual void setPreFilterCap(int preFilterCap) = 0;
@@ -410,14 +414,13 @@ public:
 
     CV_WRAP virtual int getMode() const = 0;
     CV_WRAP virtual void setMode(int mode) = 0;
+
+    CV_WRAP static Ptr<StereoSGBM> create(int minDisparity, int numDisparities, int blockSize,
+                                          int P1 = 0, int P2 = 0, int disp12MaxDiff = 0,
+                                          int preFilterCap = 0, int uniquenessRatio = 0,
+                                          int speckleWindowSize = 0, int speckleRange = 0,
+                                          int mode = StereoSGBM::MODE_SGBM);
 };
-
-
-CV_EXPORTS_W Ptr<StereoSGBM> createStereoSGBM(int minDisparity, int numDisparities, int blockSize,
-                                            int P1 = 0, int P2 = 0, int disp12MaxDiff = 0,
-                                            int preFilterCap = 0, int uniquenessRatio = 0,
-                                            int speckleWindowSize = 0, int speckleRange = 0,
-                                            int mode = StereoSGBM::MODE_SGBM);
 
 namespace fisheye
 {

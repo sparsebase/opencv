@@ -69,39 +69,60 @@ thresh_8u( const Mat& _src, Mat& _dst, uchar thresh, uchar maxval, int type )
 #endif
 
 #if defined(HAVE_IPP)
-    IppiSize sz = { roi.width, roi.height };
-    CV_SUPPRESS_DEPRECATED_START
-    switch( type )
+    CV_IPP_CHECK()
     {
-    case THRESH_TRUNC:
+        IppiSize sz = { roi.width, roi.height };
+        CV_SUPPRESS_DEPRECATED_START
+        switch( type )
+        {
+        case THRESH_TRUNC:
 #ifndef HAVE_IPP_ICV_ONLY
-        if (_src.data == _dst.data && ippiThreshold_GT_8u_C1IR(_dst.ptr(), (int)dst_step, sz, thresh) >= 0)
-            return;
+            if (_src.data == _dst.data && ippiThreshold_GT_8u_C1IR(_dst.ptr(), (int)dst_step, sz, thresh) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
 #endif
-        if (ippiThreshold_GT_8u_C1R(_src.ptr(), (int)src_step, _dst.ptr(), (int)dst_step, sz, thresh) >= 0)
-            return;
-        setIppErrorStatus();
-        break;
-    case THRESH_TOZERO:
+            if (ippiThreshold_GT_8u_C1R(_src.ptr(), (int)src_step, _dst.ptr(), (int)dst_step, sz, thresh) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
+            setIppErrorStatus();
+            break;
+        case THRESH_TOZERO:
 #ifndef HAVE_IPP_ICV_ONLY
-        if (_src.data == _dst.data && ippiThreshold_LTVal_8u_C1IR(_dst.ptr(), (int)dst_step, sz, thresh+1, 0) >= 0)
-            return;
+            if (_src.data == _dst.data && ippiThreshold_LTVal_8u_C1IR(_dst.ptr(), (int)dst_step, sz, thresh+1, 0) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
 #endif
-        if (ippiThreshold_LTVal_8u_C1R(_src.ptr(), (int)src_step, _dst.ptr(), (int)dst_step, sz, thresh+1, 0) >= 0)
-            return;
-        setIppErrorStatus();
-        break;
-    case THRESH_TOZERO_INV:
+            if (ippiThreshold_LTVal_8u_C1R(_src.ptr(), (int)src_step, _dst.ptr(), (int)dst_step, sz, thresh+1, 0) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
+            setIppErrorStatus();
+            break;
+        case THRESH_TOZERO_INV:
 #ifndef HAVE_IPP_ICV_ONLY
-        if (_src.data == _dst.data && ippiThreshold_GTVal_8u_C1IR(_dst.ptr(), (int)dst_step, sz, thresh, 0) >= 0)
-            return;
+            if (_src.data == _dst.data && ippiThreshold_GTVal_8u_C1IR(_dst.ptr(), (int)dst_step, sz, thresh, 0) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
 #endif
-        if (ippiThreshold_GTVal_8u_C1R(_src.ptr(), (int)src_step, _dst.ptr(), (int)dst_step, sz, thresh, 0) >= 0)
-            return;
-        setIppErrorStatus();
-        break;
+            if (ippiThreshold_GTVal_8u_C1R(_src.ptr(), (int)src_step, _dst.ptr(), (int)dst_step, sz, thresh, 0) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
+            setIppErrorStatus();
+            break;
+        }
+        CV_SUPPRESS_DEPRECATED_END
     }
-    CV_SUPPRESS_DEPRECATED_END
 #endif
 
     switch( type )
@@ -264,6 +285,74 @@ thresh_8u( const Mat& _src, Mat& _dst, uchar thresh, uchar maxval, int type )
             }
         }
     }
+#elif CV_NEON
+    uint8x16_t v_thresh = vdupq_n_u8(thresh), v_maxval = vdupq_n_u8(maxval);
+
+    switch( type )
+    {
+    case THRESH_BINARY:
+        for( i = 0; i < roi.height; i++ )
+        {
+            const uchar* src = _src.ptr() + src_step*i;
+            uchar* dst = _dst.ptr() + dst_step*i;
+
+            for ( j_scalar = 0; j_scalar <= roi.width - 16; j_scalar += 16)
+                vst1q_u8(dst + j_scalar, vandq_u8(vcgtq_u8(vld1q_u8(src + j_scalar), v_thresh), v_maxval));
+        }
+        break;
+
+    case THRESH_BINARY_INV:
+        for( i = 0; i < roi.height; i++ )
+        {
+            const uchar* src = _src.ptr() + src_step*i;
+            uchar* dst = _dst.ptr() + dst_step*i;
+
+            for ( j_scalar = 0; j_scalar <= roi.width - 16; j_scalar += 16)
+                vst1q_u8(dst + j_scalar, vandq_u8(vcleq_u8(vld1q_u8(src + j_scalar), v_thresh), v_maxval));
+        }
+        break;
+
+    case THRESH_TRUNC:
+        for( i = 0; i < roi.height; i++ )
+        {
+            const uchar* src = _src.ptr() + src_step*i;
+            uchar* dst = _dst.ptr() + dst_step*i;
+
+            for ( j_scalar = 0; j_scalar <= roi.width - 16; j_scalar += 16)
+                vst1q_u8(dst + j_scalar, vminq_u8(vld1q_u8(src + j_scalar), v_thresh));
+        }
+        break;
+
+    case THRESH_TOZERO:
+        for( i = 0; i < roi.height; i++ )
+        {
+            const uchar* src = _src.ptr() + src_step*i;
+            uchar* dst = _dst.ptr() + dst_step*i;
+
+            for ( j_scalar = 0; j_scalar <= roi.width - 16; j_scalar += 16)
+            {
+                uint8x16_t v_src = vld1q_u8(src + j_scalar), v_mask = vcgtq_u8(v_src, v_thresh);
+                vst1q_u8(dst + j_scalar, vandq_u8(v_mask, v_src));
+            }
+        }
+        break;
+
+    case THRESH_TOZERO_INV:
+        for( i = 0; i < roi.height; i++ )
+        {
+            const uchar* src = _src.ptr() + src_step*i;
+            uchar* dst = _dst.ptr() + dst_step*i;
+
+            for ( j_scalar = 0; j_scalar <= roi.width - 16; j_scalar += 16)
+            {
+                uint8x16_t v_src = vld1q_u8(src + j_scalar), v_mask = vcleq_u8(v_src, v_thresh);
+                vst1q_u8(dst + j_scalar, vandq_u8(v_mask, v_src));
+            }
+        }
+        break;
+    default:
+        return CV_Error( CV_StsBadArg, "" );
+    }
 #endif
 
     if( j_scalar < roi.width )
@@ -324,39 +413,60 @@ thresh_16s( const Mat& _src, Mat& _dst, short thresh, short maxval, int type )
 #endif
 
 #if defined(HAVE_IPP)
-    IppiSize sz = { roi.width, roi.height };
-    CV_SUPPRESS_DEPRECATED_START
-    switch( type )
+    CV_IPP_CHECK()
     {
-    case THRESH_TRUNC:
+        IppiSize sz = { roi.width, roi.height };
+        CV_SUPPRESS_DEPRECATED_START
+        switch( type )
+        {
+        case THRESH_TRUNC:
 #ifndef HAVE_IPP_ICV_ONLY
-        if (_src.data == _dst.data && ippiThreshold_GT_16s_C1IR(dst, (int)dst_step*sizeof(dst[0]), sz, thresh) >= 0)
-            return;
+            if (_src.data == _dst.data && ippiThreshold_GT_16s_C1IR(dst, (int)dst_step*sizeof(dst[0]), sz, thresh) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
 #endif
-        if (ippiThreshold_GT_16s_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh) >= 0)
-            return;
-        setIppErrorStatus();
-        break;
-    case THRESH_TOZERO:
+            if (ippiThreshold_GT_16s_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
+            setIppErrorStatus();
+            break;
+        case THRESH_TOZERO:
 #ifndef HAVE_IPP_ICV_ONLY
-        if (_src.data == _dst.data && ippiThreshold_LTVal_16s_C1IR(dst, (int)dst_step*sizeof(dst[0]), sz, thresh + 1, 0) >= 0)
-            return;
+            if (_src.data == _dst.data && ippiThreshold_LTVal_16s_C1IR(dst, (int)dst_step*sizeof(dst[0]), sz, thresh + 1, 0) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
 #endif
-        if (ippiThreshold_LTVal_16s_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh+1, 0) >= 0)
-            return;
-        setIppErrorStatus();
-        break;
-    case THRESH_TOZERO_INV:
+            if (ippiThreshold_LTVal_16s_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh+1, 0) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
+            setIppErrorStatus();
+            break;
+        case THRESH_TOZERO_INV:
 #ifndef HAVE_IPP_ICV_ONLY
-        if (_src.data == _dst.data && ippiThreshold_GTVal_16s_C1IR(dst, (int)dst_step*sizeof(dst[0]), sz, thresh, 0) >= 0)
-            return;
+            if (_src.data == _dst.data && ippiThreshold_GTVal_16s_C1IR(dst, (int)dst_step*sizeof(dst[0]), sz, thresh, 0) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
 #endif
-        if (ippiThreshold_GTVal_16s_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh, 0) >= 0)
-            return;
-        setIppErrorStatus();
-        break;
+            if (ippiThreshold_GTVal_16s_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh, 0) >= 0)
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
+            setIppErrorStatus();
+            break;
+        }
+        CV_SUPPRESS_DEPRECATED_END
     }
-    CV_SUPPRESS_DEPRECATED_END
 #endif
 
     switch( type )
@@ -381,6 +491,14 @@ thresh_16s( const Mat& _src, Mat& _dst, short thresh, short maxval, int type )
                     _mm_storeu_si128((__m128i*)(dst + j), v0 );
                     _mm_storeu_si128((__m128i*)(dst + j + 8), v1 );
                 }
+            }
+        #elif CV_NEON
+            int16x8_t v_thresh = vdupq_n_s16(thresh), v_maxval = vdupq_n_s16(maxval);
+
+            for( ; j <= roi.width - 8; j += 8 )
+            {
+                uint16x8_t v_mask = vcgtq_s16(vld1q_s16(src + j), v_thresh);
+                vst1q_s16(dst + j, vandq_s16(vreinterpretq_s16_u16(v_mask), v_maxval));
             }
         #endif
 
@@ -410,6 +528,14 @@ thresh_16s( const Mat& _src, Mat& _dst, short thresh, short maxval, int type )
                     _mm_storeu_si128((__m128i*)(dst + j + 8), v1 );
                 }
             }
+        #elif CV_NEON
+            int16x8_t v_thresh = vdupq_n_s16(thresh), v_maxval = vdupq_n_s16(maxval);
+
+            for( ; j <= roi.width - 8; j += 8 )
+            {
+                uint16x8_t v_mask = vcleq_s16(vld1q_s16(src + j), v_thresh);
+                vst1q_s16(dst + j, vandq_s16(vreinterpretq_s16_u16(v_mask), v_maxval));
+            }
         #endif
 
             for( ; j < roi.width; j++ )
@@ -436,6 +562,11 @@ thresh_16s( const Mat& _src, Mat& _dst, short thresh, short maxval, int type )
                     _mm_storeu_si128((__m128i*)(dst + j + 8), v1 );
                 }
             }
+        #elif CV_NEON
+            int16x8_t v_thresh = vdupq_n_s16(thresh);
+
+            for( ; j <= roi.width - 8; j += 8 )
+                vst1q_s16(dst + j, vminq_s16(vld1q_s16(src + j), v_thresh));
         #endif
 
             for( ; j < roi.width; j++ )
@@ -461,6 +592,15 @@ thresh_16s( const Mat& _src, Mat& _dst, short thresh, short maxval, int type )
                     _mm_storeu_si128((__m128i*)(dst + j), v0 );
                     _mm_storeu_si128((__m128i*)(dst + j + 8), v1 );
                 }
+            }
+        #elif CV_NEON
+            int16x8_t v_thresh = vdupq_n_s16(thresh);
+
+            for( ; j <= roi.width - 8; j += 8 )
+            {
+                int16x8_t v_src = vld1q_s16(src + j);
+                uint16x8_t v_mask = vcgtq_s16(v_src, v_thresh);
+                vst1q_s16(dst + j, vandq_s16(vreinterpretq_s16_u16(v_mask), v_src));
             }
         #endif
 
@@ -490,6 +630,15 @@ thresh_16s( const Mat& _src, Mat& _dst, short thresh, short maxval, int type )
                     _mm_storeu_si128((__m128i*)(dst + j), v0 );
                     _mm_storeu_si128((__m128i*)(dst + j + 8), v1 );
                 }
+            }
+        #elif CV_NEON
+            int16x8_t v_thresh = vdupq_n_s16(thresh);
+
+            for( ; j <= roi.width - 8; j += 8 )
+            {
+                int16x8_t v_src = vld1q_s16(src + j);
+                uint16x8_t v_mask = vcleq_s16(v_src, v_thresh);
+                vst1q_s16(dst + j, vandq_s16(vreinterpretq_s16_u16(v_mask), v_src));
             }
         #endif
             for( ; j < roi.width; j++ )
@@ -532,24 +681,36 @@ thresh_32f( const Mat& _src, Mat& _dst, float thresh, float maxval, int type )
 #endif
 
 #if defined(HAVE_IPP)
-    IppiSize sz = { roi.width, roi.height };
-    switch( type )
+    CV_IPP_CHECK()
     {
-    case THRESH_TRUNC:
-        if (0 <= ippiThreshold_GT_32f_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh))
-            return;
-        setIppErrorStatus();
-        break;
-    case THRESH_TOZERO:
-        if (0 <= ippiThreshold_LTVal_32f_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh+FLT_EPSILON, 0))
-            return;
-        setIppErrorStatus();
-        break;
-    case THRESH_TOZERO_INV:
-        if (0 <= ippiThreshold_GTVal_32f_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh, 0))
-            return;
-        setIppErrorStatus();
-        break;
+        IppiSize sz = { roi.width, roi.height };
+        switch( type )
+        {
+        case THRESH_TRUNC:
+            if (0 <= ippiThreshold_GT_32f_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh))
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
+            setIppErrorStatus();
+            break;
+        case THRESH_TOZERO:
+            if (0 <= ippiThreshold_LTVal_32f_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh+FLT_EPSILON, 0))
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
+            setIppErrorStatus();
+            break;
+        case THRESH_TOZERO_INV:
+            if (0 <= ippiThreshold_GTVal_32f_C1R(src, (int)src_step*sizeof(src[0]), dst, (int)dst_step*sizeof(dst[0]), sz, thresh, 0))
+            {
+                CV_IMPL_ADD(CV_IMPL_IPP);
+                return;
+            }
+            setIppErrorStatus();
+            break;
+        }
     }
 #endif
 
@@ -575,6 +736,16 @@ thresh_32f( const Mat& _src, Mat& _dst, float thresh, float maxval, int type )
                         _mm_storeu_ps( dst + j, v0 );
                         _mm_storeu_ps( dst + j + 4, v1 );
                     }
+                }
+#elif CV_NEON
+                float32x4_t v_thresh = vdupq_n_f32(thresh);
+                uint32x4_t v_maxval = vreinterpretq_u32_f32(vdupq_n_f32(maxval));
+
+                for( ; j <= roi.width - 4; j += 4 )
+                {
+                    float32x4_t v_src = vld1q_f32(src + j);
+                    uint32x4_t v_dst = vandq_u32(vcgtq_f32(v_src, v_thresh), v_maxval);
+                    vst1q_f32(dst + j, vreinterpretq_f32_u32(v_dst));
                 }
 #endif
 
@@ -604,6 +775,16 @@ thresh_32f( const Mat& _src, Mat& _dst, float thresh, float maxval, int type )
                         _mm_storeu_ps( dst + j + 4, v1 );
                     }
                 }
+#elif CV_NEON
+                float32x4_t v_thresh = vdupq_n_f32(thresh);
+                uint32x4_t v_maxval = vreinterpretq_u32_f32(vdupq_n_f32(maxval));
+
+                for( ; j <= roi.width - 4; j += 4 )
+                {
+                    float32x4_t v_src = vld1q_f32(src + j);
+                    uint32x4_t v_dst = vandq_u32(vcleq_f32(v_src, v_thresh), v_maxval);
+                    vst1q_f32(dst + j, vreinterpretq_f32_u32(v_dst));
+                }
 #endif
 
                 for( ; j < roi.width; j++ )
@@ -630,6 +811,11 @@ thresh_32f( const Mat& _src, Mat& _dst, float thresh, float maxval, int type )
                         _mm_storeu_ps( dst + j + 4, v1 );
                     }
                 }
+#elif CV_NEON
+                float32x4_t v_thresh = vdupq_n_f32(thresh);
+
+                for( ; j <= roi.width - 4; j += 4 )
+                    vst1q_f32(dst + j, vminq_f32(vld1q_f32(src + j), v_thresh));
 #endif
 
                 for( ; j < roi.width; j++ )
@@ -655,6 +841,16 @@ thresh_32f( const Mat& _src, Mat& _dst, float thresh, float maxval, int type )
                         _mm_storeu_ps( dst + j, v0 );
                         _mm_storeu_ps( dst + j + 4, v1 );
                     }
+                }
+#elif CV_NEON
+                float32x4_t v_thresh = vdupq_n_f32(thresh);
+
+                for( ; j <= roi.width - 4; j += 4 )
+                {
+                    float32x4_t v_src = vld1q_f32(src + j);
+                    uint32x4_t v_dst = vandq_u32(vcgtq_f32(v_src, v_thresh),
+                                                 vreinterpretq_u32_f32(v_src));
+                    vst1q_f32(dst + j, vreinterpretq_f32_u32(v_dst));
                 }
 #endif
 
@@ -685,6 +881,16 @@ thresh_32f( const Mat& _src, Mat& _dst, float thresh, float maxval, int type )
                         _mm_storeu_ps( dst + j + 4, v1 );
                     }
                 }
+#elif CV_NEON
+                float32x4_t v_thresh = vdupq_n_f32(thresh);
+
+                for( ; j <= roi.width - 4; j += 4 )
+                {
+                    float32x4_t v_src = vld1q_f32(src + j);
+                    uint32x4_t v_dst = vandq_u32(vcleq_f32(v_src, v_thresh),
+                                                 vreinterpretq_u32_f32(v_src));
+                    vst1q_f32(dst + j, vreinterpretq_f32_u32(v_dst));
+                }
 #endif
                 for( ; j < roi.width; j++ )
                 {
@@ -712,14 +918,20 @@ getThreshVal_Otsu_8u( const Mat& _src )
     }
 
 #if IPP_VERSION_X100 >= 801 && !defined(HAVE_IPP_ICV_ONLY)
-    IppiSize srcSize = { size.width, size.height };
-    Ipp8u thresh;
-    CV_SUPPRESS_DEPRECATED_START
-    IppStatus ok = ippiComputeThreshold_Otsu_8u_C1R(_src.ptr(), step, srcSize, &thresh);
-    CV_SUPPRESS_DEPRECATED_END
-    if (ok >= 0)
-        return thresh;
-    setIppErrorStatus();
+    CV_IPP_CHECK()
+    {
+        IppiSize srcSize = { size.width, size.height };
+        Ipp8u thresh;
+        CV_SUPPRESS_DEPRECATED_START
+        IppStatus ok = ippiComputeThreshold_Otsu_8u_C1R(_src.ptr(), step, srcSize, &thresh);
+        CV_SUPPRESS_DEPRECATED_END
+        if (ok >= 0)
+        {
+            CV_IMPL_ADD(CV_IMPL_IPP);
+            return thresh;
+        }
+        setIppErrorStatus();
+    }
 #endif
 
     const int N = 256;

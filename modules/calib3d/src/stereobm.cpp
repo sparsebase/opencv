@@ -925,6 +925,7 @@ public:
                         filterSpeckles(disparr.getMat(), FILTERED, params.speckleWindowSize, params.speckleRange, slidingSumBuf);
                     if (dtype == CV_32F)
                         disparr.getUMat().convertTo(disparr, CV_32FC1, 1./(1 << DISPARITY_SHIFT), 0);
+                    CV_IMPL_ADD(CV_IMPL_OCL);
                     return;
                 }
             }
@@ -1097,11 +1098,11 @@ public:
 
 const char* StereoBMImpl::name_ = "StereoMatcher.BM";
 
-}
-
-cv::Ptr<cv::StereoBM> cv::createStereoBM(int _numDisparities, int _SADWindowSize)
+Ptr<StereoBM> StereoBM::create(int _numDisparities, int _SADWindowSize)
 {
     return makePtr<StereoBMImpl>(_numDisparities, _SADWindowSize);
+}
+
 }
 
 /* End of file. */
