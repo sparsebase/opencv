@@ -471,6 +471,10 @@ bool FeatureEvaluator::setImage( InputArray _image, const std::vector<float>& _s
     bool recalcOptFeatures = updateScaleData(imgsz, _scales);
 
     size_t i, nscales = scaleData->size();
+    if (nscales == 0)
+    {
+        return false;
+    }
     Size sz0 = scaleData->at(0).szi;
     sz0 = Size(std::max(rbuf.cols, (int)alignSize(sz0.width, 16)), std::max(rbuf.rows, sz0.height));
 
@@ -1056,6 +1060,7 @@ bool CascadeClassifierImpl::ocl_detectMultiScaleNoGrouping( const std::vector<fl
     }
 
     int nstages = (int)data.stages.size();
+    int splitstage_ocl = 1;
 
     if( featureType == FeatureEvaluator::HAAR )
     {
@@ -1067,11 +1072,11 @@ bool CascadeClassifierImpl::ocl_detectMultiScaleNoGrouping( const std::vector<fl
         {
             String opts;
             if (lbufSize.area())
-                opts = format("-D LOCAL_SIZE_X=%d -D LOCAL_SIZE_Y=%d -D SUM_BUF_SIZE=%d -D SUM_BUF_STEP=%d -D NODE_COUNT=%d",
-                              localsz.width, localsz.height, lbufSize.area(), lbufSize.width, data.maxNodesPerTree);
+                opts = format("-D LOCAL_SIZE_X=%d -D LOCAL_SIZE_Y=%d -D SUM_BUF_SIZE=%d -D SUM_BUF_STEP=%d -D NODE_COUNT=%d -D SPLIT_STAGE=%d -D N_STAGES=%d -D MAX_FACES=%d",
+                              localsz.width, localsz.height, lbufSize.area(), lbufSize.width, data.maxNodesPerTree, splitstage_ocl, nstages, MAX_FACES);
             else
-                opts = format("-D LOCAL_SIZE_X=%d -D LOCAL_SIZE_Y=%d -D NODE_COUNT=%d",
-                              localsz.width, localsz.height, data.maxNodesPerTree);
+                opts = format("-D LOCAL_SIZE_X=%d -D LOCAL_SIZE_Y=%d -D NODE_COUNT=%d -D SPLIT_STAGE=%d -D N_STAGES=%d -D MAX_FACES=%d",
+                              localsz.width, localsz.height, data.maxNodesPerTree, splitstage_ocl, nstages, MAX_FACES);
             haarKernel.create("runHaarClassifier", ocl::objdetect::cascadedetect_oclsrc, opts);
             if( haarKernel.empty() )
                 return false;
@@ -1079,7 +1084,6 @@ bool CascadeClassifierImpl::ocl_detectMultiScaleNoGrouping( const std::vector<fl
 
         Rect normrect = haar->getNormRect();
         int sqofs = haar->getSquaresOffset();
-        int splitstage_ocl = 1;
 
         haarKernel.args((int)scales.size(),
                         ocl::KernelArg::PtrReadOnly(bufs[0]), // scaleData
@@ -1087,13 +1091,12 @@ bool CascadeClassifierImpl::ocl_detectMultiScaleNoGrouping( const std::vector<fl
                         ocl::KernelArg::PtrReadOnly(bufs[2]), // optfeatures
 
                         // cascade classifier
-                        splitstage_ocl, nstages,
                         ocl::KernelArg::PtrReadOnly(ustages),
                         ocl::KernelArg::PtrReadOnly(unodes),
                         ocl::KernelArg::PtrReadOnly(uleaves),
 
                         ocl::KernelArg::PtrWriteOnly(ufacepos), // positions
-                        normrect, sqofs, data.origWinSize, (int)MAX_FACES);
+                        normrect, sqofs, data.origWinSize);
         ok = haarKernel.run(2, globalsize, localsize, true);
     }
     else if( featureType == FeatureEvaluator::LBP )
@@ -1109,16 +1112,16 @@ bool CascadeClassifierImpl::ocl_detectMultiScaleNoGrouping( const std::vector<fl
         {
             String opts;
             if (lbufSize.area())
-                opts = format("-D LOCAL_SIZE_X=%d -D LOCAL_SIZE_Y=%d -D SUM_BUF_SIZE=%d -D SUM_BUF_STEP=%d",
-                              localsz.width, localsz.height, lbufSize.area(), lbufSize.width);
+                opts = format("-D LOCAL_SIZE_X=%d -D LOCAL_SIZE_Y=%d -D SUM_BUF_SIZE=%d -D SUM_BUF_STEP=%d -D SPLIT_STAGE=%d -D N_STAGES=%d -D MAX_FACES=%d",
+                              localsz.width, localsz.height, lbufSize.area(), lbufSize.width, splitstage_ocl, nstages, MAX_FACES);
             else
-                opts = format("-D LOCAL_SIZE_X=%d -D LOCAL_SIZE_Y=%d", localsz.width, localsz.height);
+                opts = format("-D LOCAL_SIZE_X=%d -D LOCAL_SIZE_Y=%d -D SPLIT_STAGE=%d -D N_STAGES=%d -D MAX_FACES=%d",
+                              localsz.width, localsz.height, splitstage_ocl, nstages, MAX_FACES);
             lbpKernel.create("runLBPClassifierStumpSimple", ocl::objdetect::cascadedetect_oclsrc, opts);
             if( lbpKernel.empty() )
                 return false;
         }
 
-        int splitstage_ocl = 1;
         int subsetSize = (data.ncategories + 31)/32;
         lbpKernel.args((int)scales.size(),
                        ocl::KernelArg::PtrReadOnly(bufs[0]), // scaleData
@@ -1126,14 +1129,13 @@ bool CascadeClassifierImpl::ocl_detectMultiScaleNoGrouping( const std::vector<fl
                        ocl::KernelArg::PtrReadOnly(bufs[2]), // optfeatures
 
                        // cascade classifier
-                       splitstage_ocl, nstages,
                        ocl::KernelArg::PtrReadOnly(ustages),
                        ocl::KernelArg::PtrReadOnly(unodes),
                        ocl::KernelArg::PtrReadOnly(usubsets),
                        subsetSize,
 
                        ocl::KernelArg::PtrWriteOnly(ufacepos), // positions
-                       data.origWinSize, (int)MAX_FACES);
+                       data.origWinSize);
 
         ok = lbpKernel.run(2, globalsize, localsize, true);
     }
@@ -1213,6 +1215,7 @@ void CascadeClassifierImpl::detectMultiScaleNoGrouping( InputArray _image, std::
     if( maxObjectSize.height == 0 || maxObjectSize.width == 0 )
         maxObjectSize = imgsz;
 
+#ifdef HAVE_OPENCL
     bool use_ocl = tryOpenCL && ocl::useOpenCL() &&
          featureEvaluator->getLocalSize().area() > 0 &&
          ocl::Device::getDefault().type() != ocl::Device::TYPE_CPU &&
@@ -1220,6 +1223,7 @@ void CascadeClassifierImpl::detectMultiScaleNoGrouping( InputArray _image, std::
          !isOldFormatCascade() &&
          maskGenerator.empty() &&
          !outputRejectLevels;
+#endif
 
     /*if( use_ocl )
     {
@@ -1262,8 +1266,8 @@ void CascadeClassifierImpl::detectMultiScaleNoGrouping( InputArray _image, std::
         return;
 
     // OpenCL code
-    if( use_ocl && ocl_detectMultiScaleNoGrouping( scales, candidates ))
-        return;
+    CV_OCL_RUN(use_ocl, ocl_detectMultiScaleNoGrouping( scales, candidates ))
+
     tryOpenCL = false;
 
     // CPU code

@@ -446,7 +446,7 @@ public:
     CvCapture_OpenNI(const char * filename);
     virtual ~CvCapture_OpenNI();
 
-    virtual double getProperty(int propIdx);
+    virtual double getProperty(int propIdx) const;
     virtual bool setProperty(int probIdx, double propVal);
     virtual bool grabFrame();
     virtual IplImage* retrieveFrame(int outputType);
@@ -477,11 +477,11 @@ protected:
 
     bool readCamerasParams();
 
-    double getDepthGeneratorProperty(int propIdx);
+    double getDepthGeneratorProperty(int propIdx) const;
     bool setDepthGeneratorProperty(int propIdx, double propVal);
-    double getImageGeneratorProperty(int propIdx);
+    double getImageGeneratorProperty(int propIdx) const;
     bool setImageGeneratorProperty(int propIdx, double propVal);
-    double getCommonProperty(int propIdx);
+    double getCommonProperty(int propIdx) const;
     bool setCommonProperty(int propIdx, double propVal);
 
     // OpenNI context
@@ -771,7 +771,7 @@ bool CvCapture_OpenNI::readCamerasParams()
     return true;
 }
 
-double CvCapture_OpenNI::getProperty( int propIdx )
+double CvCapture_OpenNI::getProperty( int propIdx ) const
 {
     double propValue = 0;
 
@@ -820,7 +820,7 @@ bool CvCapture_OpenNI::setProperty( int propIdx, double propValue )
     return isSet;
 }
 
-double CvCapture_OpenNI::getCommonProperty( int propIdx )
+double CvCapture_OpenNI::getCommonProperty( int propIdx ) const
 {
     double propValue = 0;
 
@@ -917,7 +917,7 @@ bool CvCapture_OpenNI::setCommonProperty( int propIdx, double propValue )
     return isSet;
 }
 
-double CvCapture_OpenNI::getDepthGeneratorProperty( int propIdx )
+double CvCapture_OpenNI::getDepthGeneratorProperty( int propIdx ) const
 {
     double propValue = 0;
     if( !depthGenerator.IsValid() )
@@ -953,7 +953,7 @@ double CvCapture_OpenNI::getDepthGeneratorProperty( int propIdx )
         propValue = (double)depthFocalLength_VGA;
         break;
     case CV_CAP_PROP_OPENNI_REGISTRATION :
-        propValue = depthGenerator.GetAlternativeViewPointCap().IsViewPointAs(imageGenerator) ? 1.0 : 0.0;
+        propValue = depthGenerator.GetAlternativeViewPointCap().IsViewPointAs(const_cast<CvCapture_OpenNI *>(this)->imageGenerator) ? 1.0 : 0.0;
         break;
     case CV_CAP_PROP_POS_MSEC :
         propValue = (double)depthGenerator.GetTimestamp();
@@ -1018,7 +1018,7 @@ bool CvCapture_OpenNI::setDepthGeneratorProperty( int propIdx, double propValue 
     return isSet;
 }
 
-double CvCapture_OpenNI::getImageGeneratorProperty( int propIdx )
+double CvCapture_OpenNI::getImageGeneratorProperty( int propIdx ) const
 {
     double propValue = 0.;
     if( !imageGenerator.IsValid() )
