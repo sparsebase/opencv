@@ -294,7 +294,7 @@ class CvCaptureCAM_Giganetix : public CvCapture
 
     virtual bool open( int index );
     virtual void close();
-    virtual double getProperty(int);
+    virtual double getProperty(int) const;
     virtual bool setProperty(int, double);
     virtual bool grabFrame();
     virtual IplImage* retrieveFrame(int);
@@ -393,7 +393,8 @@ CvCaptureCAM_Giganetix::open( int index )
 
     for (int i = 0; i < (int) DevicesList.size() && !b_ret; i++)
     {
-      if((b_ret = i == index))
+      b_ret = (i == index);
+      if(b_ret)
       {
         m_device = DevicesList[i];
         b_ret = m_device->Connect ();
@@ -599,7 +600,7 @@ CvCaptureCAM_Giganetix::retrieveFrame(int)
 
 /*----------------------------------------------------------------------------*/
 double
-CvCaptureCAM_Giganetix::getProperty( int property_id )
+CvCaptureCAM_Giganetix::getProperty( int property_id ) const
 {
   double d_ret = -1.0;
   INT64 i;
