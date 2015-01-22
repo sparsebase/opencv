@@ -322,14 +322,14 @@ TEST(FAST)
     FAST(src, keypoints, 20);
     CPU_OFF;
 
-    cuda::FAST_CUDA d_FAST(20);
+    cv::Ptr<cv::cuda::FastFeatureDetector> d_FAST = cv::cuda::FastFeatureDetector::create(20);
     cuda::GpuMat d_src(src);
     cuda::GpuMat d_keypoints;
 
-    d_FAST(d_src, cuda::GpuMat(), d_keypoints);
+    d_FAST->detectAsync(d_src, d_keypoints);
 
     CUDA_ON;
-    d_FAST(d_src, cuda::GpuMat(), d_keypoints);
+    d_FAST->detectAsync(d_src, d_keypoints);
     CUDA_OFF;
 }
 
@@ -350,15 +350,15 @@ TEST(ORB)
     orb->detectAndCompute(src, Mat(), keypoints, descriptors);
     CPU_OFF;
 
-    cuda::ORB_CUDA d_orb;
+    Ptr<cuda::ORB> d_orb = cuda::ORB::create();
     cuda::GpuMat d_src(src);
     cuda::GpuMat d_keypoints;
     cuda::GpuMat d_descriptors;
 
-    d_orb(d_src, cuda::GpuMat(), d_keypoints, d_descriptors);
+    d_orb->detectAndComputeAsync(d_src, cuda::GpuMat(), d_keypoints, d_descriptors);
 
     CUDA_ON;
-    d_orb(d_src, cuda::GpuMat(), d_keypoints, d_descriptors);
+    d_orb->detectAndComputeAsync(d_src, cuda::GpuMat(), d_keypoints, d_descriptors);
     CUDA_OFF;
 }
 
@@ -379,14 +379,14 @@ TEST(BruteForceMatcher)
 
     // Init CUDA matcher
 
-    cuda::BFMatcher_CUDA d_matcher(NORM_L2);
+    Ptr<cuda::DescriptorMatcher> d_matcher = cuda::DescriptorMatcher::createBFMatcher(NORM_L2);
 
     cuda::GpuMat d_query(query);
     cuda::GpuMat d_train(train);
 
     // Output
     vector< vector<DMatch> > matches(2);
-    cuda::GpuMat d_trainIdx, d_distance, d_allDist, d_nMatches;
+    cuda::GpuMat d_matches;
 
     SUBTEST << "match";
 
@@ -396,10 +396,10 @@ TEST(BruteForceMatcher)
     matcher.match(query, train, matches[0]);
     CPU_OFF;
 
-    d_matcher.matchSingle(d_query, d_train, d_trainIdx, d_distance);
+    d_matcher->matchAsync(d_query, d_train, d_matches);
 
     CUDA_ON;
-    d_matcher.matchSingle(d_query, d_train, d_trainIdx, d_distance);
+    d_matcher->matchAsync(d_query, d_train, d_matches);
     CUDA_OFF;
 
     SUBTEST << "knnMatch";
@@ -410,10 +410,10 @@ TEST(BruteForceMatcher)
     matcher.knnMatch(query, train, matches, 2);
     CPU_OFF;
 
-    d_matcher.knnMatchSingle(d_query, d_train, d_trainIdx, d_distance, d_allDist, 2);
+    d_matcher->knnMatchAsync(d_query, d_train, d_matches, 2);
 
     CUDA_ON;
-    d_matcher.knnMatchSingle(d_query, d_train, d_trainIdx, d_distance, d_allDist, 2);
+    d_matcher->knnMatchAsync(d_query, d_train, d_matches, 2);
     CUDA_OFF;
 
     SUBTEST << "radiusMatch";
@@ -426,12 +426,10 @@ TEST(BruteForceMatcher)
     matcher.radiusMatch(query, train, matches, max_distance);
     CPU_OFF;
 
-    d_trainIdx.release();
-
-    d_matcher.radiusMatchSingle(d_query, d_train, d_trainIdx, d_distance, d_nMatches, max_distance);
+    d_matcher->radiusMatchAsync(d_query, d_train, d_matches, max_distance);
 
     CUDA_ON;
-    d_matcher.radiusMatchSingle(d_query, d_train, d_trainIdx, d_distance, d_nMatches, max_distance);
+    d_matcher->radiusMatchAsync(d_query, d_train, d_matches, max_distance);
     CUDA_OFF;
 }
 
@@ -1187,87 +1185,6 @@ TEST(GoodFeaturesToTrack)
     CUDA_ON;
     detector->detect(d_src, d_pts);
     CUDA_OFF;
-}
-
-TEST(PyrLKOpticalFlow)
-{
-    Mat frame0 = imread(abspath("../data/rubberwhale1.png"));
-    if (frame0.empty()) throw runtime_error("can't open ../data/rubberwhale1.png");
-
-    Mat frame1 = imread(abspath("../data/rubberwhale2.png"));
-    if (frame1.empty()) throw runtime_error("can't open ../data/rubberwhale2.png");
-
-    Mat gray_frame;
-    cvtColor(frame0, gray_frame, COLOR_BGR2GRAY);
-
-    for (int points = 1000; points <= 8000; points *= 2)
-    {
-        SUBTEST << points;
-
-        vector<Point2f> pts;
-        goodFeaturesToTrack(gray_frame, pts, points, 0.01, 0.0);
-
-        vector<Point2f> nextPts;
-        vector<unsigned char> status;
-
-        vector<float> err;
-
-        calcOpticalFlowPyrLK(frame0, frame1, pts, nextPts, status, err);
-
-        CPU_ON;
-        calcOpticalFlowPyrLK(frame0, frame1, pts, nextPts, status, err);
-        CPU_OFF;
-
-        cuda::PyrLKOpticalFlow d_pyrLK;
-
-        cuda::GpuMat d_frame0(frame0);
-        cuda::GpuMat d_frame1(frame1);
-
-        cuda::GpuMat d_pts;
-        Mat pts_mat(1, (int)pts.size(), CV_32FC2, (void*)&pts[0]);
-        d_pts.upload(pts_mat);
-
-        cuda::GpuMat d_nextPts;
-        cuda::GpuMat d_status;
-        cuda::GpuMat d_err;
-
-        d_pyrLK.sparse(d_frame0, d_frame1, d_pts, d_nextPts, d_status, &d_err);
-
-        CUDA_ON;
-        d_pyrLK.sparse(d_frame0, d_frame1, d_pts, d_nextPts, d_status, &d_err);
-        CUDA_OFF;
-    }
-}
-
-
-TEST(FarnebackOpticalFlow)
-{
-    const string datasets[] = {"../data/rubberwhale", "../data/basketball"};
-    for (size_t i = 0; i < sizeof(datasets)/sizeof(*datasets); ++i) {
-    for (int fastPyramids = 0; fastPyramids < 2; ++fastPyramids) {
-    for (int useGaussianBlur = 0; useGaussianBlur < 2; ++useGaussianBlur) {
-
-    SUBTEST << "dataset=" << datasets[i] << ", fastPyramids=" << fastPyramids << ", useGaussianBlur=" << useGaussianBlur;
-    Mat frame0 = imread(abspath(datasets[i] + "1.png"), IMREAD_GRAYSCALE);
-    Mat frame1 = imread(abspath(datasets[i] + "2.png"), IMREAD_GRAYSCALE);
-    if (frame0.empty()) throw runtime_error("can't open " + datasets[i] + "1.png");
-    if (frame1.empty()) throw runtime_error("can't open " + datasets[i] + "2.png");
-
-    cuda::FarnebackOpticalFlow calc;
-    calc.fastPyramids = fastPyramids != 0;
-    calc.flags |= useGaussianBlur ? OPTFLOW_FARNEBACK_GAUSSIAN : 0;
-
-    cuda::GpuMat d_frame0(frame0), d_frame1(frame1), d_flowx, d_flowy;
-    CUDA_ON;
-    calc(d_frame0, d_frame1, d_flowx, d_flowy);
-    CUDA_OFF;
-
-    Mat flow;
-    CPU_ON;
-    calcOpticalFlowFarneback(frame0, frame1, flow, calc.pyrScale, calc.numLevels, calc.winSize, calc.numIters, calc.polyN, calc.polySigma, calc.flags);
-    CPU_OFF;
-
-    }}}
 }
 
 #ifdef HAVE_OPENCV_BGSEGM

@@ -43,11 +43,13 @@
 #ifndef __OPENCV_CUDALEGACY_HPP__
 #define __OPENCV_CUDALEGACY_HPP__
 
+#include "opencv2/core/cuda.hpp"
 #include "opencv2/cudalegacy/NCV.hpp"
 #include "opencv2/cudalegacy/NPP_staging.hpp"
 #include "opencv2/cudalegacy/NCVPyramid.hpp"
 #include "opencv2/cudalegacy/NCVHaarObjectDetection.hpp"
 #include "opencv2/cudalegacy/NCVBroxOpticalFlow.hpp"
+#include "opencv2/video/background_segm.hpp"
 
 /**
   @addtogroup cuda
@@ -55,5 +57,178 @@
     @defgroup cudalegacy Legacy support
   @}
 */
+
+namespace cv { namespace cuda {
+
+//! @addtogroup cudalegacy
+//! @{
+
+class CV_EXPORTS ImagePyramid : public Algorithm
+{
+public:
+    virtual void getLayer(OutputArray outImg, Size outRoi, Stream& stream = Stream::Null()) const = 0;
+};
+
+CV_EXPORTS Ptr<ImagePyramid> createImagePyramid(InputArray img, int nLayers = -1, Stream& stream = Stream::Null());
+
+//
+// GMG
+//
+
+/** @brief Background/Foreground Segmentation Algorithm.
+
+The class discriminates between foreground and background pixels by building and maintaining a model
+of the background. Any pixel which does not fit this model is then deemed to be foreground. The
+class implements algorithm described in @cite Gold2012 .
+ */
+class CV_EXPORTS BackgroundSubtractorGMG : public cv::BackgroundSubtractor
+{
+public:
+    using cv::BackgroundSubtractor::apply;
+    virtual void apply(InputArray image, OutputArray fgmask, double learningRate, Stream& stream) = 0;
+
+    virtual int getMaxFeatures() const = 0;
+    virtual void setMaxFeatures(int maxFeatures) = 0;
+
+    virtual double getDefaultLearningRate() const = 0;
+    virtual void setDefaultLearningRate(double lr) = 0;
+
+    virtual int getNumFrames() const = 0;
+    virtual void setNumFrames(int nframes) = 0;
+
+    virtual int getQuantizationLevels() const = 0;
+    virtual void setQuantizationLevels(int nlevels) = 0;
+
+    virtual double getBackgroundPrior() const = 0;
+    virtual void setBackgroundPrior(double bgprior) = 0;
+
+    virtual int getSmoothingRadius() const = 0;
+    virtual void setSmoothingRadius(int radius) = 0;
+
+    virtual double getDecisionThreshold() const = 0;
+    virtual void setDecisionThreshold(double thresh) = 0;
+
+    virtual bool getUpdateBackgroundModel() const = 0;
+    virtual void setUpdateBackgroundModel(bool update) = 0;
+
+    virtual double getMinVal() const = 0;
+    virtual void setMinVal(double val) = 0;
+
+    virtual double getMaxVal() const = 0;
+    virtual void setMaxVal(double val) = 0;
+};
+
+/** @brief Creates GMG Background Subtractor
+
+@param initializationFrames Number of frames of video to use to initialize histograms.
+@param decisionThreshold Value above which pixel is determined to be FG.
+ */
+CV_EXPORTS Ptr<cuda::BackgroundSubtractorGMG>
+    createBackgroundSubtractorGMG(int initializationFrames = 120, double decisionThreshold = 0.8);
+
+//
+// FGD
+//
+
+/** @brief The class discriminates between foreground and background pixels by building and maintaining a model
+of the background.
+
+Any pixel which does not fit this model is then deemed to be foreground. The class implements
+algorithm described in @cite FGD2003 .
+@sa BackgroundSubtractor
+ */
+class CV_EXPORTS BackgroundSubtractorFGD : public cv::BackgroundSubtractor
+{
+public:
+    /** @brief Returns the output foreground regions calculated by findContours.
+
+    @param foreground_regions Output array (CPU memory).
+     */
+    virtual void getForegroundRegions(OutputArrayOfArrays foreground_regions) = 0;
+};
+
+struct CV_EXPORTS FGDParams
+{
+    int Lc;  //!< Quantized levels per 'color' component. Power of two, typically 32, 64 or 128.
+    int N1c; //!< Number of color vectors used to model normal background color variation at a given pixel.
+    int N2c; //!< Number of color vectors retained at given pixel.  Must be > N1c, typically ~ 5/3 of N1c.
+    //!< Used to allow the first N1c vectors to adapt over time to changing background.
+
+    int Lcc;  //!< Quantized levels per 'color co-occurrence' component.  Power of two, typically 16, 32 or 64.
+    int N1cc; //!< Number of color co-occurrence vectors used to model normal background color variation at a given pixel.
+    int N2cc; //!< Number of color co-occurrence vectors retained at given pixel.  Must be > N1cc, typically ~ 5/3 of N1cc.
+    //!< Used to allow the first N1cc vectors to adapt over time to changing background.
+
+    bool is_obj_without_holes; //!< If TRUE we ignore holes within foreground blobs. Defaults to TRUE.
+    int perform_morphing;     //!< Number of erode-dilate-erode foreground-blob cleanup iterations.
+    //!< These erase one-pixel junk blobs and merge almost-touching blobs. Default value is 1.
+
+    float alpha1; //!< How quickly we forget old background pixel values seen. Typically set to 0.1.
+    float alpha2; //!< "Controls speed of feature learning". Depends on T. Typical value circa 0.005.
+    float alpha3; //!< Alternate to alpha2, used (e.g.) for quicker initial convergence. Typical value 0.1.
+
+    float delta;   //!< Affects color and color co-occurrence quantization, typically set to 2.
+    float T;       //!< A percentage value which determines when new features can be recognized as new background. (Typically 0.9).
+    float minArea; //!< Discard foreground blobs whose bounding box is smaller than this threshold.
+
+    //! default Params
+    FGDParams();
+};
+
+/** @brief Creates FGD Background Subtractor
+
+@param params Algorithm's parameters. See @cite FGD2003 for explanation.
+ */
+CV_EXPORTS Ptr<cuda::BackgroundSubtractorFGD>
+    createBackgroundSubtractorFGD(const FGDParams& params = FGDParams());
+
+//
+// Optical flow
+//
+
+//! Calculates optical flow for 2 images using block matching algorithm */
+CV_EXPORTS void calcOpticalFlowBM(const GpuMat& prev, const GpuMat& curr,
+                                  Size block_size, Size shift_size, Size max_range, bool use_previous,
+                                  GpuMat& velx, GpuMat& vely, GpuMat& buf,
+                                  Stream& stream = Stream::Null());
+
+class CV_EXPORTS FastOpticalFlowBM
+{
+public:
+    void operator ()(const GpuMat& I0, const GpuMat& I1, GpuMat& flowx, GpuMat& flowy, int search_window = 21, int block_window = 7, Stream& s = Stream::Null());
+
+private:
+    GpuMat buffer;
+    GpuMat extended_I0;
+    GpuMat extended_I1;
+};
+
+/** @brief Interpolates frames (images) using provided optical flow (displacement field).
+
+@param frame0 First frame (32-bit floating point images, single channel).
+@param frame1 Second frame. Must have the same type and size as frame0 .
+@param fu Forward horizontal displacement.
+@param fv Forward vertical displacement.
+@param bu Backward horizontal displacement.
+@param bv Backward vertical displacement.
+@param pos New frame position.
+@param newFrame Output image.
+@param buf Temporary buffer, will have width x 6\*height size, CV_32FC1 type and contain 6
+GpuMat: occlusion masks for first frame, occlusion masks for second, interpolated forward
+horizontal flow, interpolated forward vertical flow, interpolated backward horizontal flow,
+interpolated backward vertical flow.
+@param stream Stream for the asynchronous version.
+ */
+CV_EXPORTS void interpolateFrames(const GpuMat& frame0, const GpuMat& frame1,
+                                  const GpuMat& fu, const GpuMat& fv,
+                                  const GpuMat& bu, const GpuMat& bv,
+                                  float pos, GpuMat& newFrame, GpuMat& buf,
+                                  Stream& stream = Stream::Null());
+
+CV_EXPORTS void createOpticalFlowNeedleMap(const GpuMat& u, const GpuMat& v, GpuMat& vertex, GpuMat& colors);
+
+//! @}
+
+}}
 
 #endif /* __OPENCV_CUDALEGACY_HPP__ */

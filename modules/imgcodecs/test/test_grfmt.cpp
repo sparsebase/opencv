@@ -104,7 +104,8 @@ TEST(Imgcodecs_imread, regression)
         ASSERT_TRUE(imread_compare(folder + string(filenames[i]), IMREAD_COLOR));
         ASSERT_TRUE(imread_compare(folder + string(filenames[i]), IMREAD_ANYDEPTH));
         ASSERT_TRUE(imread_compare(folder + string(filenames[i]), IMREAD_ANYCOLOR));
-        ASSERT_TRUE(imread_compare(folder + string(filenames[i]), IMREAD_LOAD_GDAL));
+        if (i != 2) // GDAL does not support hdr
+            ASSERT_TRUE(imread_compare(folder + string(filenames[i]), IMREAD_LOAD_GDAL));
     }
 }
 
@@ -664,7 +665,7 @@ private:
         vector<Mat> pages;
         bool res = imreadmulti(folder + "multipage.tif", pages, flags);
         ASSERT_TRUE(res == true);
-        ASSERT_TRUE(pages.size() == page_count);
+        ASSERT_EQ(static_cast<size_t>(page_count), pages.size());
 
         for (int i = 0; i < page_count; i++)
         {
@@ -684,7 +685,7 @@ public:
         compare(IMREAD_COLOR);
         compare(IMREAD_ANYDEPTH);
         compare(IMREAD_ANYCOLOR);
-        compare(IMREAD_LOAD_GDAL);
+        // compare(IMREAD_LOAD_GDAL); // GDAL does not support multi-page TIFFs
     }
 };
 
