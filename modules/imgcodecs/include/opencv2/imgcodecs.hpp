@@ -90,6 +90,8 @@ enum { IMWRITE_PNG_STRATEGY_DEFAULT      = 0,
 
 /** @brief Loads an image from a file.
 
+@anchor imread
+
 @param filename Name of file to be loaded.
 @param flags Flags specifying the color type of a loaded image:
 -   CV_LOAD_IMAGE_ANYDEPTH - If set, return 16-bit/32-bit image when the input has the
@@ -133,6 +135,16 @@ returns an empty matrix ( Mat::data==NULL ). Currently, the following file forma
 @note In the case of color images, the decoded images will have the channels stored in B G R order.
  */
 CV_EXPORTS_W Mat imread( const String& filename, int flags = IMREAD_COLOR );
+
+/** @brief Loads a multi-page image from a file. (see imread for details.)
+
+@param filename Name of file to be loaded.
+@param flags Flags specifying the color type of a loaded image (see imread).
+            Defaults to IMREAD_ANYCOLOR, as each page may be different.
+@param mats A vector of Mat objects holding each page, if more than one.
+
+*/
+CV_EXPORTS_W bool imreadmulti(const String& filename, std::vector<Mat>& mats, int flags = IMREAD_ANYCOLOR);
 
 /** @brief Saves an image to a specified file.
 
