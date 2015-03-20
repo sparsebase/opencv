@@ -12,6 +12,7 @@
 //
 // Copyright (C) 2000-2008, Intel Corporation, all rights reserved.
 // Copyright (C) 2009-2011, Willow Garage Inc., all rights reserved.
+// Copyright (C) 2014-2015, Itseez Inc., all rights reserved.
 // Third party copyrights are property of their respective owners.
 //
 // Redistribution and use in source and binary forms, with or without modification,
@@ -168,6 +169,31 @@ static void FastAtan2_32f(const float *Y, const float *X, float *angle, int len,
             _mm_storeu_ps(angle + i, a);
         }
     }
+#elif CV_NEON
+    float32x4_t eps = vdupq_n_f32((float)DBL_EPSILON);
+    float32x4_t _90 = vdupq_n_f32(90.f), _180 = vdupq_n_f32(180.f), _360 = vdupq_n_f32(360.f);
+    float32x4_t z = vdupq_n_f32(0.0f), scale4 = vdupq_n_f32(scale);
+    float32x4_t p1 = vdupq_n_f32(atan2_p1), p3 = vdupq_n_f32(atan2_p3);
+    float32x4_t p5 = vdupq_n_f32(atan2_p5), p7 = vdupq_n_f32(atan2_p7);
+
+    for( ; i <= len - 4; i += 4 )
+    {
+        float32x4_t x = vld1q_f32(X + i), y = vld1q_f32(Y + i);
+        float32x4_t ax = vabsq_f32(x), ay = vabsq_f32(y);
+        float32x4_t tmin = vminq_f32(ax, ay), tmax = vmaxq_f32(ax, ay);
+        float32x4_t c = vmulq_f32(tmin, cv_vrecpq_f32(vaddq_f32(tmax, eps)));
+        float32x4_t c2 = vmulq_f32(c, c);
+        float32x4_t a = vmulq_f32(c2, p7);
+        a = vmulq_f32(vaddq_f32(a, p5), c2);
+        a = vmulq_f32(vaddq_f32(a, p3), c2);
+        a = vmulq_f32(vaddq_f32(a, p1), c);
+
+        a = vbslq_f32(vcgeq_f32(ax, ay), a, vsubq_f32(_90, a));
+        a = vbslq_f32(vcltq_f32(x, z), vsubq_f32(_180, a), a);
+        a = vbslq_f32(vcltq_f32(y, z), vsubq_f32(_360, a), a);
+
+        vst1q_f32(angle + i, vmulq_f32(a, scale4));
+    }
 #endif
 
     for( ; i < len; i++ )
@@ -268,17 +294,15 @@ static void Magnitude_32f(const float* x, const float* y, float* mag, int len)
         }
     }
 #elif CV_NEON
-    float CV_DECL_ALIGNED(16) m[4];
-
     for( ; i <= len - 4; i += 4 )
     {
         float32x4_t v_x = vld1q_f32(x + i), v_y = vld1q_f32(y + i);
-        vst1q_f32(m, vaddq_f32(vmulq_f32(v_x, v_x), vmulq_f32(v_y, v_y)));
-
-        mag[i] = std::sqrt(m[0]);
-        mag[i+1] = std::sqrt(m[1]);
-        mag[i+2] = std::sqrt(m[2]);
-        mag[i+3] = std::sqrt(m[3]);
+        vst1q_f32(mag + i, cv_vsqrtq_f32(vmlaq_f32(vmulq_f32(v_x, v_x), v_y, v_y)));
+    }
+    for( ; i <= len - 2; i += 2 )
+    {
+        float32x2_t v_x = vld1_f32(x + i), v_y = vld1_f32(y + i);
+        vst1_f32(mag + i, cv_vsqrt_f32(vmla_f32(vmul_f32(v_x, v_x), v_y, v_y)));
     }
 #endif
 
@@ -370,6 +394,12 @@ static void InvSqrt_32f(const float* src, float* dst, int len)
                 _mm_storeu_ps(dst + i, t0); _mm_storeu_ps(dst + i + 4, t1);
             }
     }
+#elif CV_NEON
+    for ( ; i <= len - 8; i += 8)
+    {
+        vst1q_f32(dst + i, cv_vrsqrtq_f32(vld1q_f32(src + i)));
+        vst1q_f32(dst + i + 4, cv_vrsqrtq_f32(vld1q_f32(src + i + 4)));
+    }
 #endif
 
     for( ; i < len; i++ )
@@ -427,6 +457,12 @@ static void Sqrt_32f(const float* src, float* dst, int len)
                 t0 = _mm_sqrt_ps(t0); t1 = _mm_sqrt_ps(t1);
                 _mm_storeu_ps(dst + i, t0); _mm_storeu_ps(dst + i + 4, t1);
             }
+    }
+#elif CV_NEON
+    for ( ; i <= len - 8; i += 8)
+    {
+        vst1q_f32(dst + i, cv_vsqrtq_f32(vld1q_f32(src + i)));
+        vst1q_f32(dst + i + 4, cv_vsqrtq_f32(vld1q_f32(src + i + 4)));
     }
 #endif
 
@@ -558,14 +594,46 @@ void phase( InputArray src1, InputArray src2, OutputArray dst, bool angleInDegre
             {
                 const double *x = (const double*)ptrs[0], *y = (const double*)ptrs[1];
                 double *angle = (double*)ptrs[2];
-                for( k = 0; k < len; k++ )
+                k = 0;
+
+#if CV_SSE2
+                if (USE_SSE2)
+                {
+                    for ( ; k <= len - 4; k += 4)
+                    {
+                        __m128 v_dst0 = _mm_movelh_ps(_mm_cvtpd_ps(_mm_loadu_pd(x + k)),
+                                                      _mm_cvtpd_ps(_mm_loadu_pd(x + k + 2)));
+                        __m128 v_dst1 = _mm_movelh_ps(_mm_cvtpd_ps(_mm_loadu_pd(y + k)),
+                                                      _mm_cvtpd_ps(_mm_loadu_pd(y + k + 2)));
+
+                        _mm_storeu_ps(buf[0] + k, v_dst0);
+                        _mm_storeu_ps(buf[1] + k, v_dst1);
+                    }
+                }
+#endif
+
+                for( ; k < len; k++ )
                 {
                     buf[0][k] = (float)x[k];
                     buf[1][k] = (float)y[k];
                 }
 
                 FastAtan2_32f( buf[1], buf[0], buf[0], len, angleInDegrees );
-                for( k = 0; k < len; k++ )
+                k = 0;
+
+#if CV_SSE2
+                if (USE_SSE2)
+                {
+                    for ( ; k <= len - 4; k += 4)
+                    {
+                        __m128 v_src = _mm_loadu_ps(buf[0] + k);
+                        _mm_storeu_pd(angle + k, _mm_cvtps_pd(v_src));
+                        _mm_storeu_pd(angle + k + 2, _mm_cvtps_pd(_mm_castsi128_ps(_mm_srli_si128(_mm_castps_si128(v_src), 8))));
+                    }
+                }
+#endif
+
+                for( ; k < len; k++ )
                     angle[k] = buf[0][k];
             }
             ptrs[0] += len*esz1;
@@ -663,14 +731,46 @@ void cartToPolar( InputArray src1, InputArray src2,
                 double *angle = (double*)ptrs[3];
 
                 Magnitude_64f(x, y, (double*)ptrs[2], len);
-                for( k = 0; k < len; k++ )
+                k = 0;
+
+#if CV_SSE2
+                if (USE_SSE2)
+                {
+                    for ( ; k <= len - 4; k += 4)
+                    {
+                        __m128 v_dst0 = _mm_movelh_ps(_mm_cvtpd_ps(_mm_loadu_pd(x + k)),
+                                                      _mm_cvtpd_ps(_mm_loadu_pd(x + k + 2)));
+                        __m128 v_dst1 = _mm_movelh_ps(_mm_cvtpd_ps(_mm_loadu_pd(y + k)),
+                                                      _mm_cvtpd_ps(_mm_loadu_pd(y + k + 2)));
+
+                        _mm_storeu_ps(buf[0] + k, v_dst0);
+                        _mm_storeu_ps(buf[1] + k, v_dst1);
+                    }
+                }
+#endif
+
+                for( ; k < len; k++ )
                 {
                     buf[0][k] = (float)x[k];
                     buf[1][k] = (float)y[k];
                 }
 
                 FastAtan2_32f( buf[1], buf[0], buf[0], len, angleInDegrees );
-                for( k = 0; k < len; k++ )
+                k = 0;
+
+#if CV_SSE2
+                if (USE_SSE2)
+                {
+                    for ( ; k <= len - 4; k += 4)
+                    {
+                        __m128 v_src = _mm_loadu_ps(buf[0] + k);
+                        _mm_storeu_pd(angle + k, _mm_cvtps_pd(v_src));
+                        _mm_storeu_pd(angle + k + 2, _mm_cvtps_pd(_mm_castsi128_ps(_mm_srli_si128(_mm_castps_si128(v_src), 8))));
+                    }
+                }
+#endif
+
+                for( ; k < len; k++ )
                     angle[k] = buf[0][k];
             }
             ptrs[0] += len*esz1;
@@ -736,14 +836,77 @@ static void SinCos_32f( const float *angle, float *sinval, float* cosval,
     /*static const double cos_a2 =  1;*/
 
     double k1;
-    int i;
+    int i = 0;
 
     if( !angle_in_degrees )
         k1 = N/(2*CV_PI);
     else
         k1 = N/360.;
 
-    for( i = 0; i < len; i++ )
+#if CV_AVX2
+    if (USE_AVX2)
+    {
+        __m128d v_k1 = _mm_set1_pd(k1);
+        __m128d v_1 = _mm_set1_pd(1);
+        __m128i v_N1 = _mm_set1_epi32(N - 1);
+        __m128i v_N4 = _mm_set1_epi32(N >> 2);
+        __m128d v_sin_a0 = _mm_set1_pd(sin_a0);
+        __m128d v_sin_a2 = _mm_set1_pd(sin_a2);
+        __m128d v_cos_a0 = _mm_set1_pd(cos_a0);
+
+        for ( ; i <= len - 4; i += 4)
+        {
+            __m128 v_angle = _mm_loadu_ps(angle + i);
+
+            // 0-1
+            __m128d v_t = _mm_mul_pd(_mm_cvtps_pd(v_angle), v_k1);
+            __m128i v_it = _mm_cvtpd_epi32(v_t);
+            v_t = _mm_sub_pd(v_t, _mm_cvtepi32_pd(v_it));
+
+            __m128i v_sin_idx = _mm_and_si128(v_it, v_N1);
+            __m128i v_cos_idx = _mm_and_si128(_mm_sub_epi32(v_N4, v_sin_idx), v_N1);
+
+            __m128d v_t2 = _mm_mul_pd(v_t, v_t);
+            __m128d v_sin_b = _mm_mul_pd(_mm_add_pd(_mm_mul_pd(v_sin_a0, v_t2), v_sin_a2), v_t);
+            __m128d v_cos_b = _mm_add_pd(_mm_mul_pd(v_cos_a0, v_t2), v_1);
+
+            __m128d v_sin_a = _mm_i32gather_pd(sin_table, v_sin_idx, 8);
+            __m128d v_cos_a = _mm_i32gather_pd(sin_table, v_cos_idx, 8);
+
+            __m128d v_sin_val_0 = _mm_add_pd(_mm_mul_pd(v_sin_a, v_cos_b),
+                                             _mm_mul_pd(v_cos_a, v_sin_b));
+            __m128d v_cos_val_0 = _mm_sub_pd(_mm_mul_pd(v_cos_a, v_cos_b),
+                                             _mm_mul_pd(v_sin_a, v_sin_b));
+
+            // 2-3
+            v_t = _mm_mul_pd(_mm_cvtps_pd(_mm_castsi128_ps(_mm_srli_si128(_mm_castps_si128(v_angle), 8))), v_k1);
+            v_it = _mm_cvtpd_epi32(v_t);
+            v_t = _mm_sub_pd(v_t, _mm_cvtepi32_pd(v_it));
+
+            v_sin_idx = _mm_and_si128(v_it, v_N1);
+            v_cos_idx = _mm_and_si128(_mm_sub_epi32(v_N4, v_sin_idx), v_N1);
+
+            v_t2 = _mm_mul_pd(v_t, v_t);
+            v_sin_b = _mm_mul_pd(_mm_add_pd(_mm_mul_pd(v_sin_a0, v_t2), v_sin_a2), v_t);
+            v_cos_b = _mm_add_pd(_mm_mul_pd(v_cos_a0, v_t2), v_1);
+
+            v_sin_a = _mm_i32gather_pd(sin_table, v_sin_idx, 8);
+            v_cos_a = _mm_i32gather_pd(sin_table, v_cos_idx, 8);
+
+            __m128d v_sin_val_1 = _mm_add_pd(_mm_mul_pd(v_sin_a, v_cos_b),
+                                             _mm_mul_pd(v_cos_a, v_sin_b));
+            __m128d v_cos_val_1 = _mm_sub_pd(_mm_mul_pd(v_cos_a, v_cos_b),
+                                             _mm_mul_pd(v_sin_a, v_sin_b));
+
+            _mm_storeu_ps(sinval + i, _mm_movelh_ps(_mm_cvtpd_ps(v_sin_val_0),
+                                                    _mm_cvtpd_ps(v_sin_val_1)));
+            _mm_storeu_ps(cosval + i, _mm_movelh_ps(_mm_cvtpd_ps(v_cos_val_0),
+                                                    _mm_cvtpd_ps(v_cos_val_1)));
+        }
+    }
+#endif
+
+    for( ; i < len; i++ )
     {
         double t = angle[i]*k1;
         int it = cvRound(t);
@@ -869,11 +1032,34 @@ void polarToCart( InputArray src1, InputArray src2,
 
                 SinCos_32f( angle, y, x, len, angleInDegrees );
                 if( mag )
-                    for( k = 0; k < len; k++ )
+                {
+                    k = 0;
+
+                    #if CV_NEON
+                    for( ; k <= len - 4; k += 4 )
+                    {
+                        float32x4_t v_m = vld1q_f32(mag + k);
+                        vst1q_f32(x + k, vmulq_f32(vld1q_f32(x + k), v_m));
+                        vst1q_f32(y + k, vmulq_f32(vld1q_f32(y + k), v_m));
+                    }
+                    #elif CV_SSE2
+                    if (USE_SSE2)
+                    {
+                        for( ; k <= len - 4; k += 4 )
+                        {
+                            __m128 v_m = _mm_loadu_ps(mag + k);
+                            _mm_storeu_ps(x + k, _mm_mul_ps(_mm_loadu_ps(x + k), v_m));
+                            _mm_storeu_ps(y + k, _mm_mul_ps(_mm_loadu_ps(y + k), v_m));
+                        }
+                    }
+                    #endif
+
+                    for( ; k < len; k++ )
                     {
                         float m = mag[k];
                         x[k] *= m; y[k] *= m;
                     }
+                }
             }
             else
             {
@@ -891,10 +1077,10 @@ void polarToCart( InputArray src1, InputArray src2,
                         x[k] = buf[0][k]*m; y[k] = buf[1][k]*m;
                     }
                 else
-                    for( k = 0; k < len; k++ )
-                    {
-                        x[k] = buf[0][k]; y[k] = buf[1][k];
-                    }
+                {
+                    std::memcpy(x, buf[0], sizeof(float) * len);
+                    std::memcpy(y, buf[1], sizeof(float) * len);
+                }
             }
 
             if( ptrs[0] )
@@ -2121,12 +2307,230 @@ void log( InputArray _src, OutputArray _dst )
 *                                    P O W E R                                           *
 \****************************************************************************************/
 
+template <typename T, typename WT>
+struct iPow_SIMD
+{
+    int operator() ( const T *, T *, int, int)
+    {
+        return 0;
+    }
+};
+
+#if CV_NEON
+
+template <>
+struct iPow_SIMD<uchar, int>
+{
+    int operator() ( const uchar * src, uchar * dst, int len, int power)
+    {
+        int i = 0;
+        uint32x4_t v_1 = vdupq_n_u32(1u);
+
+        for ( ; i <= len - 8; i += 8)
+        {
+            uint32x4_t v_a1 = v_1, v_a2 = v_1;
+            uint16x8_t v_src = vmovl_u8(vld1_u8(src + i));
+            uint32x4_t v_b1 = vmovl_u16(vget_low_u16(v_src)), v_b2 = vmovl_u16(vget_high_u16(v_src));
+            int p = power;
+
+            while( p > 1 )
+            {
+                if (p & 1)
+                {
+                    v_a1 = vmulq_u32(v_a1, v_b1);
+                    v_a2 = vmulq_u32(v_a2, v_b2);
+                }
+                v_b1 = vmulq_u32(v_b1, v_b1);
+                v_b2 = vmulq_u32(v_b2, v_b2);
+                p >>= 1;
+            }
+
+            v_a1 = vmulq_u32(v_a1, v_b1);
+            v_a2 = vmulq_u32(v_a2, v_b2);
+            vst1_u8(dst + i, vqmovn_u16(vcombine_u16(vqmovn_u32(v_a1), vqmovn_u32(v_a2))));
+        }
+
+        return i;
+    }
+};
+
+template <>
+struct iPow_SIMD<schar, int>
+{
+    int operator() ( const schar * src, schar * dst, int len, int power)
+    {
+        int i = 0;
+        int32x4_t v_1 = vdupq_n_s32(1);
+
+        for ( ; i <= len - 8; i += 8)
+        {
+            int32x4_t v_a1 = v_1, v_a2 = v_1;
+            int16x8_t v_src = vmovl_s8(vld1_s8(src + i));
+            int32x4_t v_b1 = vmovl_s16(vget_low_s16(v_src)), v_b2 = vmovl_s16(vget_high_s16(v_src));
+            int p = power;
+
+            while( p > 1 )
+            {
+                if (p & 1)
+                {
+                    v_a1 = vmulq_s32(v_a1, v_b1);
+                    v_a2 = vmulq_s32(v_a2, v_b2);
+                }
+                v_b1 = vmulq_s32(v_b1, v_b1);
+                v_b2 = vmulq_s32(v_b2, v_b2);
+                p >>= 1;
+            }
+
+            v_a1 = vmulq_s32(v_a1, v_b1);
+            v_a2 = vmulq_s32(v_a2, v_b2);
+            vst1_s8(dst + i, vqmovn_s16(vcombine_s16(vqmovn_s32(v_a1), vqmovn_s32(v_a2))));
+        }
+
+        return i;
+    }
+};
+
+template <>
+struct iPow_SIMD<ushort, int>
+{
+    int operator() ( const ushort * src, ushort * dst, int len, int power)
+    {
+        int i = 0;
+        uint32x4_t v_1 = vdupq_n_u32(1u);
+
+        for ( ; i <= len - 8; i += 8)
+        {
+            uint32x4_t v_a1 = v_1, v_a2 = v_1;
+            uint16x8_t v_src = vld1q_u16(src + i);
+            uint32x4_t v_b1 = vmovl_u16(vget_low_u16(v_src)), v_b2 = vmovl_u16(vget_high_u16(v_src));
+            int p = power;
+
+            while( p > 1 )
+            {
+                if (p & 1)
+                {
+                    v_a1 = vmulq_u32(v_a1, v_b1);
+                    v_a2 = vmulq_u32(v_a2, v_b2);
+                }
+                v_b1 = vmulq_u32(v_b1, v_b1);
+                v_b2 = vmulq_u32(v_b2, v_b2);
+                p >>= 1;
+            }
+
+            v_a1 = vmulq_u32(v_a1, v_b1);
+            v_a2 = vmulq_u32(v_a2, v_b2);
+            vst1q_u16(dst + i, vcombine_u16(vqmovn_u32(v_a1), vqmovn_u32(v_a2)));
+        }
+
+        return i;
+    }
+};
+
+template <>
+struct iPow_SIMD<short, int>
+{
+    int operator() ( const short * src, short * dst, int len, int power)
+    {
+        int i = 0;
+        int32x4_t v_1 = vdupq_n_s32(1);
+
+        for ( ; i <= len - 8; i += 8)
+        {
+            int32x4_t v_a1 = v_1, v_a2 = v_1;
+            int16x8_t v_src = vld1q_s16(src + i);
+            int32x4_t v_b1 = vmovl_s16(vget_low_s16(v_src)), v_b2 = vmovl_s16(vget_high_s16(v_src));
+            int p = power;
+
+            while( p > 1 )
+            {
+                if (p & 1)
+                {
+                    v_a1 = vmulq_s32(v_a1, v_b1);
+                    v_a2 = vmulq_s32(v_a2, v_b2);
+                }
+                v_b1 = vmulq_s32(v_b1, v_b1);
+                v_b2 = vmulq_s32(v_b2, v_b2);
+                p >>= 1;
+            }
+
+            v_a1 = vmulq_s32(v_a1, v_b1);
+            v_a2 = vmulq_s32(v_a2, v_b2);
+            vst1q_s16(dst + i, vcombine_s16(vqmovn_s32(v_a1), vqmovn_s32(v_a2)));
+        }
+
+        return i;
+    }
+};
+
+
+template <>
+struct iPow_SIMD<int, int>
+{
+    int operator() ( const int * src, int * dst, int len, int power)
+    {
+        int i = 0;
+        int32x4_t v_1 = vdupq_n_s32(1);
+
+        for ( ; i <= len - 4; i += 4)
+        {
+            int32x4_t v_b = vld1q_s32(src + i), v_a = v_1;
+            int p = power;
+
+            while( p > 1 )
+            {
+                if (p & 1)
+                    v_a = vmulq_s32(v_a, v_b);
+                v_b = vmulq_s32(v_b, v_b);
+                p >>= 1;
+            }
+
+            v_a = vmulq_s32(v_a, v_b);
+            vst1q_s32(dst + i, v_a);
+        }
+
+        return i;
+    }
+};
+
+template <>
+struct iPow_SIMD<float, float>
+{
+    int operator() ( const float * src, float * dst, int len, int power)
+    {
+        int i = 0;
+        float32x4_t v_1 = vdupq_n_f32(1.0f);
+
+        for ( ; i <= len - 4; i += 4)
+        {
+            float32x4_t v_b = vld1q_f32(src + i), v_a = v_1;
+            int p = power;
+
+            while( p > 1 )
+            {
+                if (p & 1)
+                    v_a = vmulq_f32(v_a, v_b);
+                v_b = vmulq_f32(v_b, v_b);
+                p >>= 1;
+            }
+
+            v_a = vmulq_f32(v_a, v_b);
+            vst1q_f32(dst + i, v_a);
+        }
+
+        return i;
+    }
+};
+
+#endif
+
 template<typename T, typename WT>
 static void
 iPow_( const T* src, T* dst, int len, int power )
 {
-    int i;
-    for( i = 0; i < len; i++ )
+    iPow_SIMD<T, WT> vop;
+    int i = vop(src, dst, len, power);
+
+    for( ; i < len; i++ )
     {
         WT a = 1, b = src[i];
         int p = power;
@@ -2212,8 +2616,8 @@ static bool ocl_pow(InputArray _src, double power, OutputArray _dst,
     if (depth == CV_64F && !doubleSupport)
         return false;
 
-    bool issqrt = std::abs(power - 0.5) < DBL_EPSILON, nonnegative = power >= 0;
-    const char * const op = issqrt ? "OP_SQRT" : is_ipower ? nonnegative ? "OP_POWN" : "OP_ROOTN" : nonnegative ? "OP_POWR" : "OP_POW";
+    bool issqrt = std::abs(power - 0.5) < DBL_EPSILON;
+    const char * const op = issqrt ? "OP_SQRT" : is_ipower ? "OP_POWN" : "OP_POW";
 
     ocl::Kernel k("KF", ocl::core::arithm_oclsrc,
                   format("-D dstT=%s -D depth=%d -D rowsPerWI=%d -D %s -D UNARY_OP%s",

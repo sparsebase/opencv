@@ -103,6 +103,7 @@ public:
 
     ANN_MLPImpl( const Params& p )
     {
+        clear();
         setParams(p);
     }
 
@@ -126,6 +127,7 @@ public:
         rng = RNG((uint64)-1);
         weights.clear();
         trained = false;
+        max_buf_sz = 1 << 12;
     }
 
     int layer_count() const { return (int)layer_sizes.size(); }
@@ -618,7 +620,7 @@ public:
                     scale[j*2] = mj;
                     scale[j*2+1] = Mj;
                 }
-                else
+                else if( !no_scale )
                 {
                     t = t*inv_scale[j*2] + inv_scale[2*j+1];
                     if( t < m1 || t > M1 )
@@ -1241,7 +1243,7 @@ public:
         clear();
 
         vector<int> _layer_sizes;
-        fn["layer_sizes"] >> _layer_sizes;
+        readVectorOrMat(fn["layer_sizes"], _layer_sizes);
         create( _layer_sizes );
 
         int i, l_count = layer_count();

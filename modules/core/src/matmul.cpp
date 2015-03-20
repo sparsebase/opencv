@@ -12,6 +12,7 @@
 //
 // Copyright (C) 2000-2008, Intel Corporation, all rights reserved.
 // Copyright (C) 2009-2011, Willow Garage Inc., all rights reserved.
+// Copyright (C) 2014-2015, Itseez Inc., all rights reserved.
 // Third party copyrights are property of their respective owners.
 //
 // Redistribution and use in source and binary forms, with or without modification,
@@ -693,7 +694,7 @@ static void GEMMStore_64fc( const Complexd* c_data, size_t c_step,
 
 #ifdef HAVE_CLAMDBLAS
 
-static bool ocl_gemm( InputArray matA, InputArray matB, double alpha,
+static bool ocl_gemm_amdblas( InputArray matA, InputArray matB, double alpha,
                       InputArray matC, double beta, OutputArray matD, int flags )
 {
     int type = matA.type(), esz = CV_ELEM_SIZE(type);
@@ -775,6 +776,84 @@ static bool ocl_gemm( InputArray matA, InputArray matB, double alpha,
 
 #endif
 
+#ifdef HAVE_OPENCL
+
+static bool ocl_gemm( InputArray matA, InputArray matB, double alpha,
+                      InputArray matC, double beta, OutputArray matD, int flags )
+{
+    int depth = matA.depth(), cn = matA.channels();
+    int type = CV_MAKETYPE(depth, cn);
+
+    CV_Assert( type == matB.type() && (type == CV_32FC1 || type == CV_64FC1 || type == CV_32FC2 || type == CV_64FC2) );
+
+    const ocl::Device & dev = ocl::Device::getDefault();
+    bool doubleSupport = dev.doubleFPConfig() > 0;
+
+    if (!doubleSupport && depth == CV_64F)
+        return false;
+
+    bool haveC = matC.kind() != cv::_InputArray::NONE;
+    Size sizeA = matA.size(), sizeB = matB.size(), sizeC = haveC ? matC.size() : Size(0, 0);
+    bool atrans = (flags & GEMM_1_T) != 0, btrans = (flags & GEMM_2_T) != 0, ctrans = (flags & GEMM_3_T) != 0;
+
+    if (atrans)
+        sizeA = Size(sizeA.height, sizeA.width);
+    if (btrans)
+        sizeB = Size(sizeB.height, sizeB.width);
+    if (haveC && ctrans)
+        sizeC = Size(sizeC.height, sizeC.width);
+
+    Size sizeD(sizeB.width, sizeA.height);
+
+    CV_Assert( !haveC || matC.type() == type );
+    CV_Assert( sizeA.width == sizeB.height && (!haveC || sizeC == sizeD) );
+
+    int max_wg_size = (int)dev.maxWorkGroupSize();
+    int block_size = (max_wg_size / (32*cn) < 32) ? (max_wg_size / (16*cn) < 16) ? (max_wg_size / (8*cn) < 8) ? 1 : 8 : 16 : 32;
+
+    matD.create(sizeD, type);
+
+    UMat A = matA.getUMat(), B = matB.getUMat(), D = matD.getUMat();
+
+    if (atrans)
+        A = A.t();
+
+    if (btrans)
+        B = B.t();
+
+    if (haveC)
+        ctrans ? transpose(matC, D) : matC.copyTo(D);
+
+    int vectorWidths[] = { 4, 4, 2, 2, 1, 4, cn, -1 };
+    int kercn = ocl::checkOptimalVectorWidth(vectorWidths, B, D);
+
+    String opts = format("-D T=%s -D T1=%s -D WT=%s -D cn=%d -D kercn=%d -D LOCAL_SIZE=%d %s %s %s",
+                          ocl::typeToStr(type), ocl::typeToStr(depth), ocl::typeToStr(CV_MAKETYPE(depth, kercn)),
+                          cn, kercn, block_size,
+                          (sizeA.width % block_size !=0) ? "-D NO_MULT" : "",
+                          haveC ? "-D HAVE_C" : "",
+                          doubleSupport ? " -D DOUBLE_SUPPORT" : "");
+
+    ocl::Kernel k("gemm", cv::ocl::core::gemm_oclsrc, opts);
+    if (k.empty())
+        return false;
+
+    if (depth == CV_64F)
+        k.args(ocl::KernelArg::ReadOnlyNoSize(A),
+               ocl::KernelArg::ReadOnlyNoSize(B, cn, kercn),
+               ocl::KernelArg::ReadWrite(D, cn, kercn),
+               sizeA.width, alpha, beta);
+    else
+        k.args(ocl::KernelArg::ReadOnlyNoSize(A),
+               ocl::KernelArg::ReadOnlyNoSize(B, cn, kercn),
+               ocl::KernelArg::ReadWrite(D, cn, kercn),
+               sizeA.width, (float)alpha, (float)beta);
+
+    size_t globalsize[2] = { sizeD.width * cn / kercn, sizeD.height};
+    size_t localsize[2] = { block_size, block_size};
+    return k.run(2, globalsize, block_size!=1 ? localsize : NULL, false);
+}
+#endif
 }
 
 void cv::gemm( InputArray matA, InputArray matB, double alpha,
@@ -783,7 +862,12 @@ void cv::gemm( InputArray matA, InputArray matB, double alpha,
 #ifdef HAVE_CLAMDBLAS
     CV_OCL_RUN(ocl::haveAmdBlas() && matA.dims() <= 2 && matB.dims() <= 2 && matC.dims() <= 2 && _matD.isUMat() &&
         matA.cols() > 20 && matA.rows() > 20 && matB.cols() > 20, // since it works incorrect for small sizes
-        ocl_gemm(matA, matB, alpha, matC, beta, _matD, flags))
+        ocl_gemm_amdblas(matA, matB, alpha, matC, beta, _matD, flags))
+#endif
+
+#ifdef HAVE_OPENCL
+    CV_OCL_RUN(_matD.isUMat() && matA.dims() <= 2 && matB.dims() <= 2 && matC.dims() <= 2,
+               ocl_gemm(matA, matB, alpha, matC, beta, _matD, flags))
 #endif
 
     const int block_lin_size = 128;
@@ -2173,13 +2257,17 @@ typedef void (*ScaleAddFunc)(const uchar* src1, const uchar* src2, uchar* dst, i
 static bool ocl_scaleAdd( InputArray _src1, double alpha, InputArray _src2, OutputArray _dst, int type )
 {
     const ocl::Device & d = ocl::Device::getDefault();
-    int depth = CV_MAT_DEPTH(type), cn = CV_MAT_CN(type), wdepth = std::max(depth, CV_32F),
-            kercn = ocl::predictOptimalVectorWidth(_src1, _src2, _dst), rowsPerWI = d.isIntel() ? 4 : 1;
+
     bool doubleSupport = d.doubleFPConfig() > 0;
     Size size = _src1.size();
-
+    int depth = CV_MAT_DEPTH(type);
     if ( (!doubleSupport && depth == CV_64F) || size != _src2.size() )
         return false;
+
+    _dst.create(size, type);
+    int cn = CV_MAT_CN(type), wdepth = std::max(depth, CV_32F);
+    int kercn = ocl::predictOptimalVectorWidthMax(_src1, _src2, _dst),
+        rowsPerWI = d.isIntel() ? 4 : 1;
 
     char cvt[2][50];
     ocl::Kernel k("KF", ocl::core::arithm_oclsrc,
@@ -2195,9 +2283,7 @@ static bool ocl_scaleAdd( InputArray _src1, double alpha, InputArray _src2, Outp
     if (k.empty())
         return false;
 
-    UMat src1 = _src1.getUMat(), src2 = _src2.getUMat();
-    _dst.create(size, type);
-    UMat dst = _dst.getUMat();
+    UMat src1 = _src1.getUMat(), src2 = _src2.getUMat(), dst = _dst.getUMat();
 
     ocl::KernelArg src1arg = ocl::KernelArg::ReadOnlyNoSize(src1),
             src2arg = ocl::KernelArg::ReadOnlyNoSize(src2),
@@ -2927,7 +3013,52 @@ static double dotProd_8s(const schar* src1, const schar* src2, int len)
     int i = 0;
     double r = 0.0;
 
-#if CV_NEON
+#if CV_SSE2
+    if( USE_SSE2 )
+    {
+        int j, len0 = len & -4, blockSize0 = (1 << 13), blockSize;
+        __m128i z = _mm_setzero_si128();
+        CV_DECL_ALIGNED(16) int buf[4];
+
+        while( i < len0 )
+        {
+            blockSize = std::min(len0 - i, blockSize0);
+            __m128i s = z;
+            j = 0;
+            for( ; j <= blockSize - 16; j += 16 )
+            {
+                __m128i b0 = _mm_loadu_si128((const __m128i*)(src1 + j));
+                __m128i b1 = _mm_loadu_si128((const __m128i*)(src2 + j));
+                __m128i s0, s1, s2, s3;
+                s0 = _mm_srai_epi16(_mm_unpacklo_epi8(b0, b0), 8);
+                s2 = _mm_srai_epi16(_mm_unpackhi_epi8(b0, b0), 8);
+                s1 = _mm_srai_epi16(_mm_unpacklo_epi8(b1, b1), 8);
+                s3 = _mm_srai_epi16(_mm_unpackhi_epi8(b1, b1), 8);
+                s0 = _mm_madd_epi16(s0, s1);
+                s2 = _mm_madd_epi16(s2, s3);
+                s = _mm_add_epi32(s, s0);
+                s = _mm_add_epi32(s, s2);
+            }
+
+            for( ; j < blockSize; j += 4 )
+            {
+                __m128i s0 = _mm_cvtsi32_si128(*(const int*)(src1 + j));
+                __m128i s1 = _mm_cvtsi32_si128(*(const int*)(src2 + j));
+                s0 = _mm_srai_epi16(_mm_unpacklo_epi8(s0, s0), 8);
+                s1 = _mm_srai_epi16(_mm_unpacklo_epi8(s1, s1), 8);
+                s0 = _mm_madd_epi16(s0, s1);
+                s = _mm_add_epi32(s, s0);
+            }
+
+            _mm_store_si128((__m128i*)buf, s);
+            r += buf[0] + buf[1] + buf[2] + buf[3];
+
+            src1 += blockSize;
+            src2 += blockSize;
+            i += blockSize;
+        }
+    }
+#elif CV_NEON
     int len0 = len & -8, blockSize0 = (1 << 14), blockSize;
     int32x4_t v_zero = vdupq_n_s32(0);
     CV_DECL_ALIGNED(16) int buf[4];

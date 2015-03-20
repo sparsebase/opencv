@@ -80,7 +80,7 @@ public:
 
     virtual bool open(const char* _filename);
     virtual void close();
-    virtual double getProperty(int);
+    virtual double getProperty(int) const;
     virtual bool setProperty(int, double);
     virtual bool grabFrame();
     virtual IplImage* retrieveFrame(int);
@@ -126,7 +126,7 @@ IplImage* CvCapture_Images::retrieveFrame(int)
     return frame;
 }
 
-double CvCapture_Images::getProperty(int id)
+double CvCapture_Images::getProperty(int id) const
 {
     switch(id)
     {
@@ -135,6 +135,8 @@ double CvCapture_Images::getProperty(int id)
         return 0;
     case CV_CAP_PROP_POS_FRAMES:
         return currentframe;
+    case CV_CAP_PROP_FRAME_COUNT:
+        return length;
     case CV_CAP_PROP_POS_AVI_RATIO:
         return (double)currentframe / (double)(length - 1);
     case CV_CAP_PROP_FRAME_WIDTH:

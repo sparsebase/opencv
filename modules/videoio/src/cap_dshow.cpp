@@ -134,8 +134,6 @@ public:
 
     virtual HRESULT STDMETHODCALLTYPE Clone(
         /* [out] */ IEnumPIDMap **ppIEnumPIDMap) = 0;
-
-    virtual ~IEnumPIDMap() {}
 };
 
 interface IMPEG2PIDMap : public IUnknown
@@ -151,8 +149,6 @@ interface IMPEG2PIDMap : public IUnknown
 
     virtual HRESULT STDMETHODCALLTYPE EnumPIDMap(
         /* [out] */ IEnumPIDMap **pIEnumPIDMap) = 0;
-
-    virtual ~IMPEG2PIDMap() {}
 };
 
 #endif
@@ -238,8 +234,6 @@ interface ISampleGrabberCB : public IUnknown
         double SampleTime,
         BYTE *pBuffer,
         LONG BufferLen) = 0;
-
-    virtual ~ISampleGrabberCB() {}
 };
 
 interface ISampleGrabber : public IUnknown
@@ -266,8 +260,6 @@ interface ISampleGrabber : public IUnknown
     virtual HRESULT STDMETHODCALLTYPE SetCallback(
         ISampleGrabberCB *pCallback,
         LONG WhichMethodToCallback) = 0;
-
-    virtual ~ISampleGrabber() {}
 };
 
 #ifndef HEADER
@@ -337,6 +329,7 @@ interface ISampleGrabber : public IUnknown
 //STUFF YOU CAN CHANGE
 
 #ifdef _DEBUG
+#include <strsafe.h>
 
 //change for verbose debug info
 static bool gs_verbose = true;
@@ -531,7 +524,7 @@ class videoInput{
         //Tells you when a new frame has arrived - you should call this if you have specified setAutoReconnectOnFreeze to true
         bool isFrameNew(int deviceID);
 
-        bool isDeviceSetup(int deviceID);
+        bool isDeviceSetup(int deviceID) const;
 
         //Returns the pixels - flipRedAndBlue toggles RGB/BGR flipping - and you can flip the image too
         unsigned char * getPixels(int deviceID, bool flipRedAndBlue = true, bool flipImage = false);
@@ -556,11 +549,11 @@ class videoInput{
         //bool setVideoSettingCam(int deviceID, long Property, long lValue, long Flags = NULL, bool useDefaultValue = false);
 
         //get width, height and number of pixels
-        int  getWidth(int deviceID);
-        int  getHeight(int deviceID);
-        int  getSize(int deviceID);
-        int  getFourcc(int deviceID);
-        double getFPS(int deviceID);
+        int  getWidth(int deviceID) const;
+        int  getHeight(int deviceID) const;
+        int  getSize(int deviceID) const;
+        int  getFourcc(int deviceID) const;
+        double getFPS(int deviceID) const;
 
         //completely stops and frees a device
         void stopDevice(int deviceID);
@@ -584,7 +577,7 @@ class videoInput{
         int  getDeviceCount();
         void getMediaSubtypeAsString(GUID type, char * typeAsString);
         GUID *getMediaSubtypeFromFourcc(int fourcc);
-        int    getFourccFromMediaSubtype(GUID type);
+        int   getFourccFromMediaSubtype(GUID type) const;
 
         void getVideoPropertyAsString(int prop, char * propertyAsString);
         void getCameraPropertyAsString(int prop, char * propertyAsString);
@@ -1421,8 +1414,8 @@ int videoInput::listDevices(bool silent){
 //
 // ----------------------------------------------------------------------
 
-int videoInput::getWidth(int id){
-
+int videoInput::getWidth(int id) const
+{
     if(isDeviceSetup(id))
     {
         return VDList[id] ->width;
@@ -1438,8 +1431,8 @@ int videoInput::getWidth(int id){
 //
 // ----------------------------------------------------------------------
 
-int videoInput::getHeight(int id){
-
+int videoInput::getHeight(int id) const
+{
     if(isDeviceSetup(id))
     {
         return VDList[id] ->height;
@@ -1453,8 +1446,8 @@ int videoInput::getHeight(int id){
 //
 //
 // ----------------------------------------------------------------------
-int videoInput::getFourcc(int id){
-
+int videoInput::getFourcc(int id) const
+{
     if(isDeviceSetup(id))
     {
         return getFourccFromMediaSubtype(VDList[id]->videoType);
@@ -1464,8 +1457,8 @@ int videoInput::getFourcc(int id){
 
 }
 
-double videoInput::getFPS(int id){
-
+double videoInput::getFPS(int id) const
+{
     if(isDeviceSetup(id))
     {
         double frameTime= VDList[id]->requestedFrameTime;
@@ -1484,8 +1477,8 @@ double videoInput::getFPS(int id){
 //
 // ----------------------------------------------------------------------
 
-int videoInput::getSize(int id){
-
+int videoInput::getSize(int id) const
+{
     if(isDeviceSetup(id))
     {
         return VDList[id] ->videoSize;
@@ -1617,11 +1610,10 @@ bool videoInput::isFrameNew(int id){
 //
 // ----------------------------------------------------------------------
 
-bool videoInput::isDeviceSetup(int id){
-
+bool videoInput::isDeviceSetup(int id) const
+{
     if(id>=0 && id<devicesFound && VDList[id]->readyToCapture)return true;
     else return false;
-
 }
 
 
@@ -2208,7 +2200,8 @@ void videoInput::getMediaSubtypeAsString(GUID type, char * typeAsString){
     memcpy(typeAsString, tmpStr, sizeof(char)*8);
 }
 
-int videoInput::getFourccFromMediaSubtype(GUID type) {
+int videoInput::getFourccFromMediaSubtype(GUID type) const
+{
     return type.Data1;
 }
 
@@ -3153,7 +3146,7 @@ VideoCapture_DShow::~VideoCapture_DShow()
     CoUninitialize();
 }
 
-double VideoCapture_DShow::getProperty(int propIdx)
+double VideoCapture_DShow::getProperty(int propIdx) const
 {
 
     long min_value, max_value, stepping_delta, current_value, flags, defaultValue;

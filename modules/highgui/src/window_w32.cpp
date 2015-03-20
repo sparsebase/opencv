@@ -48,6 +48,11 @@
 #  pragma GCC diagnostic ignored "-Wmissing-declarations"
 #endif
 
+#if (_WIN32_IE < 0x0500)
+#pragma message("WARNING: Win32 UI needs to be compiled with _WIN32_IE >= 0x0500 (_WIN32_IE_IE50)")
+#define _WIN32_IE 0x0500
+#endif
+
 #include <commctrl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -481,6 +486,23 @@ void cvSetModeWindow_W32( const char* name, double prop_value)//Yannick Verdie
     }
 
     __END__;
+}
+
+void cv::setWindowTitle(const String& winname, const String& title)
+{
+    CvWindow* window = icvFindWindowByName(winname.c_str());
+
+    if (!window)
+    {
+        namedWindow(winname);
+        window = icvFindWindowByName(winname.c_str());
+    }
+
+    if (!window)
+        CV_Error(Error::StsNullPtr, "NULL window");
+
+    if (!SetWindowText(window->frame, title.c_str()))
+        CV_Error_(Error::StsError, ("Failed to set \"%s\" window title to \"%s\"", winname.c_str(), title.c_str()));
 }
 
 double cvGetPropWindowAutoSize_W32(const char* name)
@@ -1129,7 +1151,7 @@ cvShowImage( const char* name, const CvArr* arr )
         icvUpdateWindowPos(window);
     InvalidateRect(window->hwnd, 0, 0);
     // philipg: this is not needed and just slows things down
-//    UpdateWindow(window->hwnd);
+    //    UpdateWindow(window->hwnd);
 
     __END__;
 }
@@ -1287,7 +1309,7 @@ MainWindowProc( HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam )
     switch(uMsg)
     {
     case WM_COPY:
-        ::WindowProc(hwnd, uMsg, wParam, lParam); // call highgui proc. There may be a better way to do this.
+        ::SendMessage(window->hwnd, uMsg, wParam, lParam);
         break;
 
     case WM_DESTROY:
@@ -1821,6 +1843,52 @@ cvDestroyAllWindows(void)
     }
 }
 
+static void showSaveDialog(CvWindow* window)
+{
+    if (!window || !window->image)
+        return;
+
+    SIZE sz;
+    int channels;
+    void* data;
+    if (icvGetBitmapData(window, &sz, &channels, &data))
+        return; // nothing to save
+
+    char szFileName[MAX_PATH] = "";
+    // try to use window title as file name
+    GetWindowText(window->frame, szFileName, MAX_PATH);
+
+    OPENFILENAME ofn;
+    ZeroMemory(&ofn, sizeof(ofn));
+#ifdef OPENFILENAME_SIZE_VERSION_400
+    // we are not going to use new fields any way
+    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400;
+#else
+    ofn.lStructSize = sizeof(ofn);
+#endif
+    ofn.hwndOwner = window->hwnd;
+    ofn.lpstrFilter = "Portable Network Graphics files (*.png)\0*.png\0"
+                      "JPEG files (*.jpeg;*.jpg;*.jpe)\0*.jpeg;*.jpg;*.jpe\0"
+                      "Windows bitmap (*.bmp;*.dib)\0*.bmp;*.dib\0"
+                      "TIFF Files (*.tiff;*.tif)\0*.tiff;*.tif\0"
+                      "JPEG-2000 files (*.jp2)\0*.jp2\0"
+                      "WebP files (*.webp)\0*.webp\0"
+                      "Portable image format (*.pbm;*.pgm;*.ppm;*.pxm;*.pnm)\0*.pbm;*.pgm;*.ppm;*.pxm;*.pnm\0"
+                      "OpenEXR Image files (*.exr)\0*.exr\0"
+                      "Radiance HDR (*.hdr;*.pic)\0*.hdr;*.pic\0"
+                      "Sun raster files (*.sr;*.ras)\0*.sr;*.ras\0"
+                      "All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = szFileName;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOREADONLYRETURN | OFN_NOCHANGEDIR;
+    ofn.lpstrDefExt = "png";
+
+    if (GetSaveFileName(&ofn))
+    {
+        cv::Mat tmp; cv::flip(cv::Mat(sz.cy, sz.cx, CV_8UC(channels), data), tmp, 0);
+        cv::imwrite(szFileName, tmp);
+    }
+}
 
 CV_IMPL int
 cvWaitKey( int delay )
@@ -1866,12 +1934,12 @@ cvWaitKey( int delay )
 
                 case WM_KEYDOWN:
                     TranslateMessage(&message);
-                    if( (message.wParam >= VK_F1 && message.wParam <= VK_F24) ||
-                        message.wParam == VK_HOME || message.wParam == VK_END ||
-                        message.wParam == VK_UP || message.wParam == VK_DOWN ||
-                        message.wParam == VK_LEFT || message.wParam == VK_RIGHT ||
-                        message.wParam == VK_INSERT || message.wParam == VK_DELETE ||
-                        message.wParam == VK_PRIOR || message.wParam == VK_NEXT )
+                    if( (message.wParam >= VK_F1 && message.wParam <= VK_F24)       ||
+                        message.wParam == VK_HOME   || message.wParam == VK_END     ||
+                        message.wParam == VK_UP     || message.wParam == VK_DOWN    ||
+                        message.wParam == VK_LEFT   || message.wParam == VK_RIGHT   ||
+                        message.wParam == VK_INSERT || message.wParam == VK_DELETE  ||
+                        message.wParam == VK_PRIOR  || message.wParam == VK_NEXT )
                     {
                         DispatchMessage(&message);
                         is_processed = 1;
@@ -1880,7 +1948,11 @@ cvWaitKey( int delay )
 
                     // Intercept Ctrl+C for copy to clipboard
                     if ('C' == message.wParam && (::GetKeyState(VK_CONTROL)>>15))
-                        ::PostMessage(message.hwnd, WM_COPY, 0, 0);
+                        ::SendMessage(message.hwnd, WM_COPY, 0, 0);
+
+                    // Intercept Ctrl+S for "save as" dialog
+                    if ('S' == message.wParam && (::GetKeyState(VK_CONTROL)>>15))
+                        showSaveDialog(window);
 
                 default:
                     DispatchMessage(&message);
@@ -1911,22 +1983,6 @@ icvFindTrackbarByName( const CvWindow* window, const char* name )
 }
 
 
-typedef struct
-{
-    UINT cbSize;
-    DWORD dwMask;
-    int idCommand;
-    int iImage;
-    BYTE fsState;
-    BYTE fsStyle;
-    WORD cx;
-    DWORD lParam;
-    LPSTR pszText;
-    int cchText;
-}
-ButtonInfo;
-
-
 static int
 icvCreateTrackbar( const char* trackbar_name, const char* window_name,
                    int* val, int count, CvTrackbarCallback on_notify,
@@ -1946,7 +2002,7 @@ icvCreateTrackbar( const char* trackbar_name, const char* window_name,
     if( !window_name || !trackbar_name )
         CV_ERROR( CV_StsNullPtr, "NULL window or trackbar name" );
 
-    if( count <= 0 )
+    if( count < 0 )
         CV_ERROR( CV_StsOutOfRange, "Bad trackbar maximal value" );
 
     window = icvFindWindowByName(window_name);
@@ -1956,8 +2012,8 @@ icvCreateTrackbar( const char* trackbar_name, const char* window_name,
     trackbar = icvFindTrackbarByName(window,trackbar_name);
     if( !trackbar )
     {
-        TBBUTTON tbs;
-        ButtonInfo tbis;
+        TBBUTTON tbs = {0};
+        TBBUTTONINFO tbis = {0};
         RECT rect;
         int bcount;
         int len = (int)strlen( trackbar_name );
@@ -1967,9 +2023,14 @@ icvCreateTrackbar( const char* trackbar_name, const char* window_name,
         {
             const int default_height = 30;
 
-            window->toolbar.toolbar = CreateToolbarEx(
-                    window->frame, WS_CHILD | CCS_TOP | TBSTYLE_WRAPABLE,
-                    1, 0, 0, 0, 0, 0, 16, 20, 16, 16, sizeof(TBBUTTON));
+            // CreateToolbarEx is deprecated and forces linking against Comctl32.lib.
+            window->toolbar.toolbar = CreateWindowEx(0, TOOLBARCLASSNAME, NULL,
+                                        WS_CHILD | CCS_TOP | TBSTYLE_WRAPABLE | BTNS_AUTOSIZE | BTNS_BUTTON,
+                                        0, 0, 0, 0,
+                                        window->frame, NULL, GetModuleHandle(NULL), NULL);
+            // CreateToolbarEx automatically sends this but CreateWindowEx doesn't.
+            SendMessage(window->toolbar.toolbar, TB_BUTTONSTRUCTSIZE, (WPARAM)sizeof(TBBUTTON), 0);
+
             GetClientRect(window->frame, &rect);
             MoveWindow( window->toolbar.toolbar, 0, 0,
                         rect.right - rect.left, default_height, TRUE);
@@ -2211,6 +2272,38 @@ CV_IMPL void cvSetTrackbarPos( const char* trackbar_name, const char* window_nam
 
         SendMessage( trackbar->hwnd, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)pos );
         icvUpdateTrackbar( trackbar, pos );
+    }
+
+    __END__;
+}
+
+
+CV_IMPL void cvSetTrackbarMax(const char* trackbar_name, const char* window_name, int maxval)
+{
+    CV_FUNCNAME( "cvSetTrackbarMax" );
+
+    __BEGIN__;
+
+    if (maxval >= 0)
+    {
+        CvWindow* window = 0;
+        CvTrackbar* trackbar = 0;
+        if (trackbar_name == 0 || window_name == 0)
+        {
+            CV_ERROR(CV_StsNullPtr, "NULL trackbar or window name");
+        }
+
+        window = icvFindWindowByName(window_name);
+        if (window)
+        {
+            trackbar = icvFindTrackbarByName(window, trackbar_name);
+            if (trackbar)
+            {
+                // The position will be min(pos, maxval).
+                trackbar->maxval = maxval;
+                SendMessage(trackbar->hwnd, TBM_SETRANGEMAX, (WPARAM)TRUE, (LPARAM)maxval);
+            }
+        }
     }
 
     __END__;

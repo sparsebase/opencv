@@ -38,6 +38,11 @@ if(POLICY CMP0022)
   cmake_policy(SET CMP0022 OLD)
 endif()
 
+if(POLICY CMP0026)
+  # silence cmake 3.0+ warnings about reading LOCATION attribute
+  cmake_policy(SET CMP0026 OLD)
+endif()
+
 # must go before the project command
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "Configs" FORCE)
 if(DEFINED CMAKE_BUILD_TYPE)
@@ -176,6 +181,7 @@ OCV_OPTION(BUILD_PERF_TESTS         "Build performance tests"                   
 OCV_OPTION(BUILD_TESTS              "Build accuracy & regression tests"           ON  IF (NOT IOS) )
 OCV_OPTION(BUILD_WITH_DEBUG_INFO    "Include debug info into debug libs (not MSCV only)" ON )
 OCV_OPTION(BUILD_WITH_STATIC_CRT    "Enables use of staticaly linked CRT for staticaly linked OpenCV" ON IF MSVC )
+OCV_OPTION(BUILD_WITH_DYNAMIC_IPP   "Enables dynamic linking of IPP (only for standalone IPP)" OFF )
 OCV_OPTION(BUILD_FAT_JAVA_LIB       "Create fat java wrapper containing the whole OpenCV library" ON IF NOT BUILD_SHARED_LIBS AND CMAKE_COMPILER_IS_GNUCXX )
 OCV_OPTION(BUILD_ANDROID_SERVICE    "Build OpenCV Manager for Google Play" OFF IF ANDROID AND ANDROID_SOURCE_TREE )
 OCV_OPTION(BUILD_ANDROID_PACKAGE    "Build platform-specific package for Google Play" OFF IF ANDROID )
@@ -210,11 +216,14 @@ OCV_OPTION(ENABLE_POWERPC             "Enable PowerPC for GCC"                  
 OCV_OPTION(ENABLE_FAST_MATH           "Enable -ffast-math (not recommended for GCC 4.6.x)"       OFF  IF (CMAKE_COMPILER_IS_GNUCXX AND (X86 OR X86_64)) )
 OCV_OPTION(ENABLE_SSE                 "Enable SSE instructions"                                  ON   IF ((MSVC OR CMAKE_COMPILER_IS_GNUCXX) AND (X86 OR X86_64)) )
 OCV_OPTION(ENABLE_SSE2                "Enable SSE2 instructions"                                 ON   IF ((MSVC OR CMAKE_COMPILER_IS_GNUCXX) AND (X86 OR X86_64)) )
-OCV_OPTION(ENABLE_SSE3                "Enable SSE3 instructions"                                 ON   IF ((CV_ICC OR CMAKE_COMPILER_IS_GNUCXX) AND (X86 OR X86_64)) )
-OCV_OPTION(ENABLE_SSSE3               "Enable SSSE3 instructions"                                OFF  IF (CMAKE_COMPILER_IS_GNUCXX AND (X86 OR X86_64)) )
-OCV_OPTION(ENABLE_SSE41               "Enable SSE4.1 instructions"                               OFF  IF ((CV_ICC OR CMAKE_COMPILER_IS_GNUCXX) AND (X86 OR X86_64)) )
-OCV_OPTION(ENABLE_SSE42               "Enable SSE4.2 instructions"                               OFF  IF (CMAKE_COMPILER_IS_GNUCXX AND (X86 OR X86_64)) )
+OCV_OPTION(ENABLE_SSE3                "Enable SSE3 instructions"                                 ON   IF ((MSVC OR CMAKE_COMPILER_IS_GNUCXX OR CV_ICC) AND (X86 OR X86_64)) )
+OCV_OPTION(ENABLE_SSSE3               "Enable SSSE3 instructions"                                OFF  IF ((MSVC OR CMAKE_COMPILER_IS_GNUCXX) AND (X86 OR X86_64)) )
+OCV_OPTION(ENABLE_SSE41               "Enable SSE4.1 instructions"                               OFF  IF ((MSVC OR CMAKE_COMPILER_IS_GNUCXX OR CV_ICC) AND (X86 OR X86_64)) )
+OCV_OPTION(ENABLE_SSE42               "Enable SSE4.2 instructions"                               OFF  IF ((MSVC OR CMAKE_COMPILER_IS_GNUCXX) AND (X86 OR X86_64)) )
+OCV_OPTION(ENABLE_POPCNT              "Enable POPCNT instructions"                               OFF  IF ((MSVC OR CMAKE_COMPILER_IS_GNUCXX) AND (X86 OR X86_64)) )
 OCV_OPTION(ENABLE_AVX                 "Enable AVX instructions"                                  OFF  IF ((MSVC OR CMAKE_COMPILER_IS_GNUCXX) AND (X86 OR X86_64)) )
+OCV_OPTION(ENABLE_AVX2                "Enable AVX2 instructions"                                 OFF  IF ((MSVC OR CMAKE_COMPILER_IS_GNUCXX) AND (X86 OR X86_64)) )
+OCV_OPTION(ENABLE_FMA3                "Enable FMA3 instructions"                                 OFF  IF ((MSVC OR CMAKE_COMPILER_IS_GNUCXX) AND (X86 OR X86_64)) )
 OCV_OPTION(ENABLE_NEON                "Enable NEON instructions"                                 OFF  IF CMAKE_COMPILER_IS_GNUCXX AND (ARM OR IOS) )
 OCV_OPTION(ENABLE_VFPV3               "Enable VFPv3-D32 instructions"                            OFF  IF CMAKE_COMPILER_IS_GNUCXX AND (ARM OR IOS) )
 OCV_OPTION(ENABLE_NOISY_WARNINGS      "Show all warnings even if they are too noisy"             OFF )
@@ -286,6 +295,16 @@ endif()
 
 if(NOT OPENCV_TEST_INSTALL_PATH)
   set(OPENCV_TEST_INSTALL_PATH "${OPENCV_BIN_INSTALL_PATH}")
+endif()
+
+if(OPENCV_TEST_DATA_PATH AND NOT OPENCV_TEST_DATA_INSTALL_PATH)
+  if(ANDROID)
+    set(OPENCV_TEST_DATA_INSTALL_PATH "sdk/etc/testdata")
+  elseif(WIN32)
+    set(OPENCV_TEST_DATA_INSTALL_PATH "testdata")
+  else()
+    set(OPENCV_TEST_DATA_INSTALL_PATH "share/OpenCV/testdata")
+  endif()
 endif()
 
 if(ANDROID)
@@ -457,9 +476,22 @@ include(cmake/OpenCVFindLibsPerf.cmake)
 #  Detect other 3rd-party libraries/tools
 # ----------------------------------------------------------------------------
 
-# --- LATEX for pdf documentation ---
+# --- Doxygen and PlantUML for documentation ---
+unset(DOXYGEN_FOUND CACHE)
 if(BUILD_DOCS)
-  include(cmake/OpenCVFindLATEX.cmake)
+  find_package(Doxygen)
+  if (PLANTUML_JAR)
+    message(STATUS "Using PlantUML path from command line: ${PLANTUML_JAR}")
+  elseif(DEFINED ENV{PLANTUML_JAR})
+    set(PLANTUML_JAR $ENV{PLANTUML_JAR})
+    message(STATUS "Using PLantUML path from environment: ${PLANTUML_JAR}")
+  else()
+    message(STATUS "To enable PlantUML support, set PLANTUML_JAR environment variable or pass -DPLANTUML_JAR=<filepath> option to cmake")
+  endif()
+  if (PLANTUML_JAR AND DOXYGEN_VERSION VERSION_LESS 1.8.8)
+    message(STATUS "You need Doxygen version 1.8.8 or later to use PlantUML")
+    unset(PLANTUML_JAR)
+  endif()
 endif(BUILD_DOCS)
 
 # --- Python Support ---
@@ -588,10 +620,6 @@ if(INSTALL_TESTS AND OPENCV_TEST_DATA_PATH AND UNIX)
     install(PROGRAMS "${CMAKE_BINARY_DIR}/unix-install/opencv_run_all_tests.sh"
             DESTINATION ${CMAKE_INSTALL_PREFIX} COMPONENT tests)
   else()
-    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/templates/opencv_testing.sh.in"
-                   "${CMAKE_BINARY_DIR}/unix-install/opencv_testing.sh" @ONLY)
-    install(FILES "${CMAKE_BINARY_DIR}/unix-install/opencv_testing.sh"
-            DESTINATION /etc/profile.d/ COMPONENT tests)
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/templates/opencv_run_all_tests_unix.sh.in"
                    "${CMAKE_BINARY_DIR}/unix-install/opencv_run_all_tests.sh" @ONLY)
     install(PROGRAMS "${CMAKE_BINARY_DIR}/unix-install/opencv_run_all_tests.sh"
@@ -950,6 +978,9 @@ status("  Other third-party libraries:")
 if(WITH_IPP AND HAVE_IPP)
   status("    Use IPP:" "${IPP_VERSION_STR} [${IPP_VERSION_MAJOR}.${IPP_VERSION_MINOR}.${IPP_VERSION_BUILD}]")
   status("         at:" "${IPP_ROOT_DIR}")
+  if(NOT HAVE_IPP_ICV_ONLY)
+    status("     linked:" BUILD_WITH_DYNAMIC_IPP THEN "dynamic" ELSE "static")
+  endif()
 else()
   status("    Use IPP:"   WITH_IPP AND NOT HAVE_IPP THEN "IPP not found" ELSE NO)
 endif()
@@ -1063,14 +1094,8 @@ endif()
 if(BUILD_DOCS)
   status("")
   status("  Documentation:")
-  if(HAVE_SPHINX)
-    status("    Build Documentation:" PDFLATEX_COMPILER      THEN YES ELSE "YES (only HTML and without math expressions)")
-  else()
-    status("    Build Documentation:" NO)
-  endif()
-  status("    Sphinx:"              HAVE_SPHINX              THEN "${SPHINX_BUILD} (ver ${SPHINX_VERSION})" ELSE NO)
-  status("    PdfLaTeX compiler:"   PDFLATEX_COMPILER        THEN "${PDFLATEX_COMPILER}" ELSE NO)
-  status("    PlantUML:"            PLANTUML                 THEN "${PLANTUML}" ELSE NO)
+  status("    Doxygen:"             DOXYGEN_FOUND             THEN "${DOXYGEN_EXECUTABLE} (ver ${DOXYGEN_VERSION})" ELSE NO)
+  status("    PlantUML:"            PLANTUML_JAR              THEN "${PLANTUML_JAR}" ELSE NO)
 endif()
 
 # ========================== samples and tests ==========================

@@ -15,8 +15,8 @@ int main(int argc, char** argv)
     std::string in;
     if (argc != 2)
     {
-        std::cout << "Usage: lsd_lines [input image]. Now loading building.jpg" << std::endl;
-        in = "building.jpg";
+        std::cout << "Usage: lsd_lines [input image]. Now loading ../data/building.jpg" << std::endl;
+        in = "../data/building.jpg";
     }
     else
     {
@@ -37,7 +37,7 @@ int main(int argc, char** argv)
 #endif
 
     double start = double(getTickCount());
-    vector<Vec4i> lines_std;
+    vector<Vec4f> lines_std;
 
     // Detect the lines
     ls->detect(image, lines_std);

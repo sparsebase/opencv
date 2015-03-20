@@ -83,7 +83,7 @@ inline void calcFirstElementInRow(__global const uchar * src, int src_step, int 
     int sx = x - SEARCH_SIZE2, sy = y - SEARCH_SIZE2;
     int col_dists_current_private[TEMPLATE_SIZE];
 
-    for (int i = id, size = SEARCH_SIZE_SQ; i < size; i += CTA_SIZE)
+    for (int i = id; i < SEARCH_SIZE_SQ; i += CTA_SIZE)
     {
         int dist = 0, value;
 
@@ -128,7 +128,7 @@ inline void calcElementInFirstRow(__global const uchar * src, int src_step, int 
     y -= TEMPLATE_SIZE2;
     int sx = x - SEARCH_SIZE2, sy = y - SEARCH_SIZE2;
 
-    for (int i = id, size = SEARCH_SIZE_SQ; i < size; i += CTA_SIZE)
+    for (int i = id; i < SEARCH_SIZE_SQ; i += CTA_SIZE)
     {
         __global const uchar_t * src_current = (__global const uchar_t *)(src + mad24(y, src_step, mad24(cn, x, src_offset)));
         __global const uchar_t * src_template = (__global const uchar_t *)(src +
@@ -167,7 +167,7 @@ inline void calcElement(__global const uchar * src, int src_step, int src_offset
     sy_up -= SEARCH_SIZE2;
     sy_down -= SEARCH_SIZE2;
 
-    for (int i = id, size = SEARCH_SIZE_SQ; i < size; i += CTA_SIZE)
+    for (int i = id; i < SEARCH_SIZE_SQ; i += CTA_SIZE)
     {
         int wx = i % SEARCH_SIZE, wy = i / SEARCH_SIZE;
 
@@ -194,7 +194,7 @@ inline void convolveWindow(__global const uchar * src, int src_step, int src_off
     int sx = x - SEARCH_SIZE2, sy = y - SEARCH_SIZE2, weights = 0;
     int_t weighted_sum = (int_t)(0);
 
-    for (int i = id, size = SEARCH_SIZE_SQ; i < size; i += CTA_SIZE)
+    for (int i = id; i < SEARCH_SIZE_SQ; i += CTA_SIZE)
     {
         int src_index = mad24(sy + i / SEARCH_SIZE, src_step, mad24(i % SEARCH_SIZE + sx, cn, src_offset));
         int_t src_value = convert_int_t(*(__global const uchar_t *)(src + src_index));
@@ -206,22 +206,11 @@ inline void convolveWindow(__global const uchar * src, int src_step, int src_off
         weighted_sum += (int_t)(weight) * src_value;
     }
 
-    if (id >= CTA_SIZE2)
-    {
-        int id2 = id - CTA_SIZE2;
-        weights_local[id2] = weights;
-        weighted_sum_local[id2] = weighted_sum;
-    }
+    weights_local[id] = weights;
+    weighted_sum_local[id] = weighted_sum;
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    if (id < CTA_SIZE2)
-    {
-        weights_local[id] += weights;
-        weighted_sum_local[id] += weighted_sum;
-    }
-    barrier(CLK_LOCAL_MEM_FENCE);
-
-    for (int lsize = CTA_SIZE2 >> 1; lsize > 2; lsize >>= 1)
+    for (int lsize = CTA_SIZE >> 1; lsize > 2; lsize >>= 1)
     {
         if (id < lsize)
         {
@@ -252,8 +241,8 @@ __kernel void fastNlMeansDenoising(__global const uchar * src, int src_step, int
     int block_y = get_group_id(1);
     int id = get_local_id(0), first;
 
-    __local int dists[SEARCH_SIZE_SQ], weights[CTA_SIZE2];
-    __local int_t weighted_sum[CTA_SIZE2];
+    __local int dists[SEARCH_SIZE_SQ], weights[CTA_SIZE];
+    __local int_t weighted_sum[CTA_SIZE];
 
     int x0 = block_x * BLOCK_COLS, x1 = min(x0 + BLOCK_COLS, dst_cols);
     int y0 = block_y * BLOCK_ROWS, y1 = min(y0 + BLOCK_ROWS, dst_rows);
@@ -281,7 +270,6 @@ __kernel void fastNlMeansDenoising(__global const uchar * src, int src_step, int
 
                 first = (first + 1) % TEMPLATE_SIZE;
             }
-            barrier(CLK_LOCAL_MEM_FENCE);
 
             convolveWindow(src, src_step, src_offset, dists, almostDist2Weight, dst, dst_step, dst_offset,
                 y, x, id, weights, weighted_sum, almostTemplateWindowSizeSqBinShift);

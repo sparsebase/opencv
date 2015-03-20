@@ -11,6 +11,7 @@
 //
 // Copyright (C) 2000-2008, Intel Corporation, all rights reserved.
 // Copyright (C) 2009-2011, Willow Garage Inc., all rights reserved.
+// Copyright (C) 2014, Itseez Inc., all rights reserved.
 // Third party copyrights are property of their respective owners.
 //
 // Redistribution and use in source and binary forms, with or without modification,
@@ -846,7 +847,7 @@ static bool ocl_repeat(InputArray _src, int ny, int nx, OutputArray _dst)
 
     int type = _src.type(), depth = CV_MAT_DEPTH(type), cn = CV_MAT_CN(type),
             rowsPerWI = ocl::Device::getDefault().isIntel() ? 4 : 1,
-            kercn = std::min(ocl::predictOptimalVectorWidth(_src, _dst), 4);
+            kercn = ocl::predictOptimalVectorWidth(_src, _dst);
 
     ocl::Kernel k("repeat", ocl::core::repeat_oclsrc,
                   format("-D T=%s -D nx=%d -D ny=%d -D rowsPerWI=%d -D cn=%d",

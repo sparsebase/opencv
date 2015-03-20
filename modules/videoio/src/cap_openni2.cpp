@@ -68,8 +68,6 @@
 #define CV_DEPTH_STREAM 0
 #define CV_COLOR_STREAM 1
 
-#define CV_NUM_STREAMS 2
-
 #include "OpenNI.h"
 #include "PS1080.h"
 
@@ -94,7 +92,7 @@ public:
     CvCapture_OpenNI2(const char * filename);
     virtual ~CvCapture_OpenNI2();
 
-    virtual double getProperty(int propIdx);
+    virtual double getProperty(int propIdx) const;
     virtual bool setProperty(int probIdx, double propVal);
     virtual bool grabFrame();
     virtual IplImage* retrieveFrame(int outputType);
@@ -126,11 +124,11 @@ protected:
 
     bool readCamerasParams();
 
-    double getDepthGeneratorProperty(int propIdx);
+    double getDepthGeneratorProperty(int propIdx) const;
     bool setDepthGeneratorProperty(int propIdx, double propVal);
-    double getImageGeneratorProperty(int propIdx);
+    double getImageGeneratorProperty(int propIdx) const;
     bool setImageGeneratorProperty(int propIdx, double propVal);
-    double getCommonProperty(int propIdx);
+    double getCommonProperty(int propIdx) const;
     bool setCommonProperty(int propIdx, double propVal);
 
     // OpenNI context
@@ -161,6 +159,7 @@ protected:
 
     int currentStream;
 
+    int numStream;
     std::vector<OutputMap> outputMaps;
 };
 
@@ -198,6 +197,7 @@ openni::VideoMode CvCapture_OpenNI2::defaultDepthOutputMode()
 
 CvCapture_OpenNI2::CvCapture_OpenNI2( int index )
 {
+    numStream = 2;
     const char* deviceURI = openni::ANY_DEVICE;
     openni::Status status;
     int deviceType = DEVICE_DEFAULT;
@@ -214,6 +214,10 @@ CvCapture_OpenNI2::CvCapture_OpenNI2( int index )
         deviceType = index / 10;
         index %= 10;
     }
+
+    // Asus XTION and Occipital Structure Sensor do not have an image generator
+    if (deviceType == DEVICE_ASUS_XTION)
+        numStream = 1;
 
     if( deviceType > DEVICE_MAX )
         return;
@@ -243,7 +247,7 @@ CvCapture_OpenNI2::CvCapture_OpenNI2( int index )
     {
         if (depth.isValid())
         {
-            CV_DbgAssert(depth.setVideoMode(defaultDepthOutputMode()) == openni::STATUS_OK); // xn::DepthGenerator supports VGA only! (Jan 2011)
+            CV_Assert(depth.setVideoMode(defaultDepthOutputMode()) == openni::STATUS_OK); // xn::DepthGenerator supports VGA only! (Jan 2011)
         }
 
         status = depth.start();
@@ -259,6 +263,10 @@ CvCapture_OpenNI2::CvCapture_OpenNI2( int index )
         CV_Error(CV_StsError, cv::format("CvCapture_OpenNI2::CvCapture_OpenNI2 : Couldn't find depth stream:: %s\n", openni::OpenNI::getExtendedError()));
         return;
     }
+
+    streams = new openni::VideoStream*[numStream];
+    streams[CV_DEPTH_STREAM] = &depth;
+
     // create a color object
     status = color.create(device, openni::SENSOR_COLOR);
     if (status == openni::STATUS_OK)
@@ -266,7 +274,7 @@ CvCapture_OpenNI2::CvCapture_OpenNI2( int index )
         // Set map output mode.
         if (color.isValid())
         {
-            CV_DbgAssert(color.setVideoMode(defaultColorOutputMode()) == openni::STATUS_OK);
+            CV_Assert(color.setVideoMode(defaultColorOutputMode()) == openni::STATUS_OK);
         }
         status = color.start();
         if (status != openni::STATUS_OK)
@@ -275,13 +283,19 @@ CvCapture_OpenNI2::CvCapture_OpenNI2( int index )
             color.destroy();
             return;
         }
+        streams[CV_COLOR_STREAM] = &color;
     }
-    else
+    else if (numStream == 2)
     {
         CV_Error(CV_StsError, cv::format("CvCapture_OpenNI2::CvCapture_OpenNI2 : Couldn't find color stream: %s\n", openni::OpenNI::getExtendedError()));
         return;
     }
 
+    if( !readCamerasParams() )
+    {
+        CV_Error(CV_StsError, cv::format("CvCapture_OpenNI2::CvCapture_OpenNI2 : Could not read cameras parameters\n"));
+        return;
+    }
 
 //    if( deviceType == DEVICE_ASUS_XTION )
 //    {
@@ -291,14 +305,6 @@ CvCapture_OpenNI2::CvCapture_OpenNI2( int index )
 //        depthGenerator.SetIntProperty("RegistrationType", 1 /*XN_PROCESSING_HARDWARE*/);
 //    }
 
-    if( !readCamerasParams() )
-    {
-        CV_Error(CV_StsError, cv::format("CvCapture_OpenNI2::CvCapture_OpenNI2 : Could not read cameras parameters\n"));
-        return;
-    }
-    streams = new openni::VideoStream*[CV_NUM_STREAMS];
-    streams[CV_DEPTH_STREAM] = &depth;
-    streams[CV_COLOR_STREAM] = &color;
 
     outputMaps.resize( outputMapsTypesCount );
 
@@ -309,6 +315,7 @@ CvCapture_OpenNI2::CvCapture_OpenNI2( int index )
 
 CvCapture_OpenNI2::CvCapture_OpenNI2(const char * filename)
 {
+    numStream = 2;
     openni::Status status;
 
     isContextOpened = false;
@@ -388,7 +395,7 @@ bool CvCapture_OpenNI2::readCamerasParams()
     return true;
 }
 
-double CvCapture_OpenNI2::getProperty( int propIdx )
+double CvCapture_OpenNI2::getProperty( int propIdx ) const
 {
     double propValue = 0;
 
@@ -437,7 +444,7 @@ bool CvCapture_OpenNI2::setProperty( int propIdx, double propValue )
     return isSet;
 }
 
-double CvCapture_OpenNI2::getCommonProperty( int propIdx )
+double CvCapture_OpenNI2::getCommonProperty( int propIdx ) const
 {
     double propValue = 0;
 
@@ -459,7 +466,7 @@ double CvCapture_OpenNI2::getCommonProperty( int propIdx )
         propValue = getDepthGeneratorProperty( propIdx );
         break;
     case CV_CAP_PROP_OPENNI2_SYNC :
-        propValue = device.getDepthColorSyncEnabled();
+        propValue = const_cast<CvCapture_OpenNI2 *>(this)->device.getDepthColorSyncEnabled();
     case CV_CAP_PROP_OPENNI2_MIRROR:
     {
         bool isMirroring = color.getMirroringEnabled() && depth.getMirroringEnabled();
@@ -501,7 +508,7 @@ bool CvCapture_OpenNI2::setCommonProperty( int propIdx, double propValue )
     return isSet;
 }
 
-double CvCapture_OpenNI2::getDepthGeneratorProperty( int propIdx )
+double CvCapture_OpenNI2::getDepthGeneratorProperty( int propIdx ) const
 {
     double propValue = 0;
     if( !depth.isValid() )
@@ -566,7 +573,7 @@ bool CvCapture_OpenNI2::setDepthGeneratorProperty( int propIdx, double propValue
                 // then the property isn't avaliable
                 if ( color.isValid() )
                 {
-                    openni::ImageRegistrationMode mode = propValue < 1.0 ? openni::IMAGE_REGISTRATION_OFF : openni::IMAGE_REGISTRATION_DEPTH_TO_COLOR;
+                    openni::ImageRegistrationMode mode = propValue < 1.0 ? openni::IMAGE_REGISTRATION_DEPTH_TO_COLOR : openni::IMAGE_REGISTRATION_OFF;
                     if( !device.getImageRegistrationMode() == mode )
                     {
                         if (device.isImageRegistrationModeSupported(mode))
@@ -601,7 +608,7 @@ bool CvCapture_OpenNI2::setDepthGeneratorProperty( int propIdx, double propValue
     return isSet;
 }
 
-double CvCapture_OpenNI2::getImageGeneratorProperty( int propIdx )
+double CvCapture_OpenNI2::getImageGeneratorProperty( int propIdx ) const
 {
     double propValue = 0.;
     if( !color.isValid() )
@@ -646,7 +653,7 @@ bool CvCapture_OpenNI2::setImageGeneratorProperty(int propIdx, double propValue)
         {
         case CV_CAP_PROP_OPENNI_OUTPUT_MODE :
         {
-            openni::VideoMode mode;
+            openni::VideoMode mode = color.getVideoMode();
 
             switch( cvRound(propValue) )
             {
@@ -695,7 +702,7 @@ bool CvCapture_OpenNI2::grabFrame()
 
     bool isGrabbed = false;
 
-    openni::Status status = openni::OpenNI::waitForAnyStream(streams, CV_NUM_STREAMS, &currentStream, CV_STREAM_TIMEOUT);
+    openni::Status status = openni::OpenNI::waitForAnyStream(streams, numStream, &currentStream, CV_STREAM_TIMEOUT);
     if( status != openni::STATUS_OK )
         return false;
 
@@ -814,10 +821,10 @@ IplImage* CvCapture_OpenNI2::retrieveValidDepthMask()
     if (!depthFrame.isValid())
         return 0;
 
-    cv::Mat depth;
-    getDepthMapFromMetaData(depthFrame, depth, noSampleValue, shadowValue);
+    cv::Mat d;
+    getDepthMapFromMetaData(depthFrame, d, noSampleValue, shadowValue);
 
-    outputMaps[CV_CAP_OPENNI_VALID_DEPTH_MASK].mat = depth != CvCapture_OpenNI2::INVALID_PIXEL_VAL;
+    outputMaps[CV_CAP_OPENNI_VALID_DEPTH_MASK].mat = d != CvCapture_OpenNI2::INVALID_PIXEL_VAL;
 
     return outputMaps[CV_CAP_OPENNI_VALID_DEPTH_MASK].getIplImagePtr();
 }

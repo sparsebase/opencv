@@ -87,6 +87,11 @@ Point2f PlaneWarper::warpPoint(const Point2f &pt, InputArray K, InputArray R, In
     return uv;
 }
 
+Rect PlaneWarper::buildMaps(Size src_size, InputArray K, InputArray R, OutputArray xmap, OutputArray ymap)
+{
+    return buildMaps(src_size, K, R, Mat::zeros(3, 1, CV_32FC1), xmap, ymap);
+}
+
 Rect PlaneWarper::buildMaps(Size src_size, InputArray K, InputArray R, InputArray T, OutputArray _xmap, OutputArray _ymap)
 {
     projector_.setCameraParams(K, R, T);
@@ -110,7 +115,7 @@ Rect PlaneWarper::buildMaps(Size src_size, InputArray K, InputArray R, InputArra
 
             k.args(ocl::KernelArg::WriteOnlyNoSize(uxmap), ocl::KernelArg::WriteOnly(uymap),
                    ocl::KernelArg::PtrReadOnly(uk_rinv), ocl::KernelArg::PtrReadOnly(ut),
-                   dst_tl.x, dst_tl.y, projector_.scale, rowsPerWI);
+                   dst_tl.x, dst_tl.y, 1/projector_.scale, rowsPerWI);
 
             size_t globalsize[2] = { dsize.width, (dsize.height + rowsPerWI - 1) / rowsPerWI };
             if (k.run(2, globalsize, NULL, true))
@@ -237,91 +242,6 @@ void SphericalWarper::detectResultRoi(Size src_size, Point &dst_tl, Point &dst_b
     dst_br.y = static_cast<int>(br_vf);
 }
 
-
-#ifdef HAVE_OPENCV_CUDAWARPING
-Rect PlaneWarperGpu::buildMaps(Size src_size, InputArray K, InputArray R, cuda::GpuMat & xmap, cuda::GpuMat & ymap)
-{
-    return buildMaps(src_size, K, R, Mat::zeros(3, 1, CV_32F), xmap, ymap);
-}
-
-Rect PlaneWarperGpu::buildMaps(Size src_size, InputArray K, InputArray R, InputArray T, cuda::GpuMat & xmap, cuda::GpuMat & ymap)
-{
-    projector_.setCameraParams(K, R, T);
-
-    Point dst_tl, dst_br;
-    detectResultRoi(src_size, dst_tl, dst_br);
-
-    cuda::buildWarpPlaneMaps(src_size, Rect(dst_tl, Point(dst_br.x + 1, dst_br.y + 1)),
-                            K, R, T, projector_.scale, xmap, ymap);
-
-    return Rect(dst_tl, dst_br);
-}
-
-Point PlaneWarperGpu::warp(const cuda::GpuMat & src, InputArray K, InputArray R, int interp_mode, int border_mode,
-                           cuda::GpuMat & dst)
-{
-    return warp(src, K, R, Mat::zeros(3, 1, CV_32F), interp_mode, border_mode, dst);
-}
-
-
-Point PlaneWarperGpu::warp(const cuda::GpuMat & src, InputArray K, InputArray R, InputArray T, int interp_mode, int border_mode,
-                           cuda::GpuMat & dst)
-{
-    Rect dst_roi = buildMaps(src.size(), K, R, T, d_xmap_, d_ymap_);
-    dst.create(dst_roi.height + 1, dst_roi.width + 1, src.type());
-    cuda::remap(src, dst, d_xmap_, d_ymap_, interp_mode, border_mode);
-    return dst_roi.tl();
-}
-
-
-Rect SphericalWarperGpu::buildMaps(Size src_size, InputArray K, InputArray R, cuda::GpuMat & xmap, cuda::GpuMat & ymap)
-{
-    projector_.setCameraParams(K, R);
-
-    Point dst_tl, dst_br;
-    detectResultRoi(src_size, dst_tl, dst_br);
-
-    cuda::buildWarpSphericalMaps(src_size, Rect(dst_tl, Point(dst_br.x + 1, dst_br.y + 1)),
-                                K, R, projector_.scale, xmap, ymap);
-
-    return Rect(dst_tl, dst_br);
-}
-
-
-Point SphericalWarperGpu::warp(const cuda::GpuMat & src, InputArray K, InputArray R, int interp_mode, int border_mode,
-                               cuda::GpuMat & dst)
-{
-    Rect dst_roi = buildMaps(src.size(), K, R, d_xmap_, d_ymap_);
-    dst.create(dst_roi.height + 1, dst_roi.width + 1, src.type());
-    cuda::remap(src, dst, d_xmap_, d_ymap_, interp_mode, border_mode);
-    return dst_roi.tl();
-}
-
-
-Rect CylindricalWarperGpu::buildMaps(Size src_size, InputArray K, InputArray R, cuda::GpuMat & xmap, cuda::GpuMat & ymap)
-{
-    projector_.setCameraParams(K, R);
-
-    Point dst_tl, dst_br;
-    detectResultRoi(src_size, dst_tl, dst_br);
-
-    cuda::buildWarpCylindricalMaps(src_size, Rect(dst_tl, Point(dst_br.x + 1, dst_br.y + 1)),
-                                  K, R, projector_.scale, xmap, ymap);
-
-    return Rect(dst_tl, dst_br);
-}
-
-
-Point CylindricalWarperGpu::warp(const cuda::GpuMat & src, InputArray K, InputArray R, int interp_mode, int border_mode,
-                                 cuda::GpuMat & dst)
-{
-    Rect dst_roi = buildMaps(src.size(), K, R, d_xmap_, d_ymap_);
-    dst.create(dst_roi.height + 1, dst_roi.width + 1, src.type());
-    cuda::remap(src, dst, d_xmap_, d_ymap_, interp_mode, border_mode);
-    return dst_roi.tl();
-}
-#endif
-
 void SphericalPortraitWarper::detectResultRoi(Size src_size, Point &dst_tl, Point &dst_br)
 {
     detectResultRoiByBorder(src_size, dst_tl, dst_br);
@@ -388,7 +308,7 @@ Rect SphericalWarper::buildMaps(Size src_size, InputArray K, InputArray R, Outpu
             UMat uxmap = xmap.getUMat(), uymap = ymap.getUMat(), uk_rinv = k_rinv.getUMat(ACCESS_READ);
 
             k.args(ocl::KernelArg::WriteOnlyNoSize(uxmap), ocl::KernelArg::WriteOnly(uymap),
-                   ocl::KernelArg::PtrReadOnly(uk_rinv), dst_tl.x, dst_tl.y, projector_.scale, rowsPerWI);
+                   ocl::KernelArg::PtrReadOnly(uk_rinv), dst_tl.x, dst_tl.y, 1/projector_.scale, rowsPerWI);
 
             size_t globalsize[2] = { dsize.width, (dsize.height + rowsPerWI - 1) / rowsPerWI };
             if (k.run(2, globalsize, NULL, true))
@@ -436,7 +356,7 @@ Rect CylindricalWarper::buildMaps(Size src_size, InputArray K, InputArray R, Out
             UMat uxmap = xmap.getUMat(), uymap = ymap.getUMat(), uk_rinv = k_rinv.getUMat(ACCESS_READ);
 
             k.args(ocl::KernelArg::WriteOnlyNoSize(uxmap), ocl::KernelArg::WriteOnly(uymap),
-                   ocl::KernelArg::PtrReadOnly(uk_rinv), dst_tl.x, dst_tl.y, projector_.scale,
+                   ocl::KernelArg::PtrReadOnly(uk_rinv), dst_tl.x, dst_tl.y, 1/projector_.scale,
                    rowsPerWI);
 
             size_t globalsize[2] = { dsize.width, (dsize.height + rowsPerWI - 1) / rowsPerWI };
