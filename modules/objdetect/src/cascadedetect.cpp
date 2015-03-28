@@ -449,6 +449,12 @@ bool FeatureEvaluator::updateScaleData( Size imgsz, const std::vector<float>& _s
         s.ystep = sc >= 2 ? 1 : 2;
         s.scale = sc;
         s.szi = Size(sz.width+1, sz.height+1);
+
+        if( i == 0 )
+        {
+            layer_dy = s.szi.height;
+        }
+
         if( layer_ofs.x + s.szi.width > sbufSize.width )
         {
             layer_ofs = Point(0, layer_ofs.y + layer_dy);
@@ -549,6 +555,7 @@ HaarEvaluator::HaarEvaluator()
     localSize = Size(4, 2);
     lbufSize = Size(0, 0);
     nchannels = 0;
+    tofs = 0;
 }
 
 HaarEvaluator::~HaarEvaluator()
@@ -670,6 +677,10 @@ void HaarEvaluator::computeOptFeatures()
     copyVectorToUMat(*optfeatures_lbuf, ufbuf);
 }
 
+bool HaarEvaluator::setImage(InputArray _image, const std::vector<float>& _scales){
+    tofs = 0;
+    return FeatureEvaluator::setImage(_image, _scales);
+}
 
 bool HaarEvaluator::setWindow( Point pt, int scaleIdx )
 {
@@ -931,10 +942,10 @@ Ptr<CascadeClassifierImpl::MaskGenerator> CascadeClassifierImpl::getMaskGenerato
 Ptr<BaseCascadeClassifier::MaskGenerator> createFaceDetectionMaskGenerator()
 {
 #ifdef HAVE_TEGRA_OPTIMIZATION
-    return tegra::getCascadeClassifierMaskGenerator();
-#else
-    return Ptr<BaseCascadeClassifier::MaskGenerator>();
+    if (tegra::useTegra())
+        return tegra::getCascadeClassifierMaskGenerator();
 #endif
+    return Ptr<BaseCascadeClassifier::MaskGenerator>();
 }
 
 class CascadeClassifierInvoker : public ParallelLoopBody
@@ -1262,7 +1273,7 @@ void CascadeClassifierImpl::detectMultiScaleNoGrouping( InputArray _image, std::
         scales.push_back((float)factor);
     }
 
-    if( !featureEvaluator->setImage(gray, scales) )
+    if( scales.size() == 0 || !featureEvaluator->setImage(gray, scales) )
         return;
 
     // OpenCL code

@@ -74,7 +74,7 @@ available methods are 6:
 
 -#  **method=CV_TM_CCOEFF**
 
-    \f[R(x,y)= \sum _{x',y'} (T'(x',y')  \cdot I(x+x',y+y'))\f]
+    \f[R(x,y)= \sum _{x',y'} (T'(x',y')  \cdot I'(x+x',y+y'))\f]
 
     where
 
@@ -146,7 +146,7 @@ Explanation
     int result_cols =  img.cols - templ.cols + 1;
     int result_rows = img.rows - templ.rows + 1;
 
-    result.create( result_cols, result_rows, CV_32FC1 );
+    result.create( result_rows, result_cols, CV_32FC1 );
     @endcode
 -#  Perform the template matching operation:
     @code{.cpp}
