@@ -134,6 +134,14 @@ Additionally you can find very basic sample source code to introduce you to the 
 
     We will learn how to save an Image in OpenCV...plus a small conversion to grayscale
 
+-   @subpage tutorial_biicode
+
+    _Compatibility:_ \> OpenCV 2.4
+
+    _Author:_ biicode
+
+    We will learn how to setup and use OpenCV in Mac OS X, Linux and Windows
+
 -   @subpage tutorial_documentation
 
     _Compatibility:_ \> OpenCV 3.0
@@ -141,3 +149,9 @@ Additionally you can find very basic sample source code to introduce you to the 
     _Author:_ Maksim Shabunin
 
     This tutorial describes new documenting process and some useful Doxygen features.
+
+-   @subpage tutorial_transition_guide
+
+    _Author:_ Maksim Shabunin
+
+    This document describes some aspects of 2.4 -> 3.0 transition process.

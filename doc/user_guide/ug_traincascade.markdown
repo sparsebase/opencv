@@ -7,7 +7,7 @@ Introduction
 The work with a cascade classifier inlcudes two major stages: training and detection. Detection
 stage is described in a documentation of objdetect module of general OpenCV documentation.
 Documentation gives some basic information about cascade classifier. Current guide is describing how
-to train a cascade classifier: preparation of a training data and running the training application.
+to train a cascade classifier: preparation of the training data and running the training application.
 
 ### Important notes
 
@@ -58,9 +58,9 @@ Negative samples are taken from arbitrary images. These images must not contain 
 Negative samples are enumerated in a special file. It is a text file in which each line contains an
 image filename (relative to the directory of the description file) of negative sample image. This
 file must be created manually. Note that negative samples and sample images are also called
-background samples or background samples images, and are used interchangeably in this document.
+background samples or background images, and are used interchangeably in this document.
 Described images may be of different sizes. But each image should be (but not nessesarily) larger
-then a training window size, because these images are used to subsample negative image to the
+than a training window size, because these images are used to subsample negative image to the
 training size.
 
 An example of description file:
@@ -255,6 +255,12 @@ Command line arguments of opencv_traincascade application grouped by purposes:
 
         Maximum number of threads to use during training. Notice that the actual number of used
         threads may be lower, depending on your machine and compilation options.
+
+    -   -acceptanceRatioBreakValue \<break_value\>
+
+        This argument is used to determine how precise your model should keep learning and when to stop.
+        A good guideline is to train not further than 10e-5, to ensure the model does not overtrain on your training data.
+        By default this value is set to -1 to disable this feature.
 
 -#  Cascade parameters:
 

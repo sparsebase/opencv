@@ -52,7 +52,15 @@ CvCapture* cvCreateCameraCapture_XIMEA( int index )
 // Enumerate connected devices
 void CvCaptureCAM_XIMEA::init()
 {
+#if defined WIN32 || defined _WIN32
     xiGetNumberDevices( &numDevices);
+#else
+    // try second re-enumeration if first one fails
+    if (xiGetNumberDevices( &numDevices) != XI_OK)
+    {
+        xiGetNumberDevices( &numDevices);
+    }
+#endif
     hmv = NULL;
     frame = NULL;
     timeout = 0;
@@ -73,8 +81,17 @@ bool CvCaptureCAM_XIMEA::open( int wIndex )
 
     if((mvret = xiOpenDevice( wIndex, &hmv)) != XI_OK)
     {
+#if defined WIN32 || defined _WIN32
         errMsg("Open XI_DEVICE failed", mvret);
         return false;
+#else
+        // try opening second time if first fails
+        if((mvret = xiOpenDevice( wIndex, &hmv))  != XI_OK)
+        {
+            errMsg("Open XI_DEVICE failed", mvret);
+            return false;
+        }
+#endif
     }
 
     int width   = 0;
