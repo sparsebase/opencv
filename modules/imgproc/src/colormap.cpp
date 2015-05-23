@@ -83,7 +83,6 @@ Mat interp1_(const Mat& X_, const Mat& Y_, const Mat& XI)
     // interpolated values
     Mat yi = Mat::zeros(XI.size(), XI.type());
     for(int i = 0; i < n; i++) {
-        int c = 0;
         int low = 0;
         int high = X.rows - 1;
         // set bounds
@@ -93,7 +92,7 @@ Mat interp1_(const Mat& X_, const Mat& Y_, const Mat& XI)
             low = high - 1;
         // binary search
         while((high-low)>1) {
-            c = low + ((high - low) >> 1);
+            const int c = low + ((high - low) >> 1);
             if(XI.at<_Tp>(i,0) > X.at<_Tp>(c,0)) {
                 low = c;
             } else {
@@ -470,6 +469,30 @@ namespace colormap
         }
     };
 
+    // Colormap similar to MATLAB's "parula".
+    class Parula : public ColorMap {
+    public:
+        Parula() : ColorMap() {
+            init(256);
+        }
+
+        Parula(int n) : ColorMap() {
+            init(n);
+        }
+
+        void init(int n) {
+            float r[] = { 0.2078, 0.0118, 0.0784, 0.0235, 0.2196, 0.5725, 0.8510, 0.9882, 0.9765 };
+            float g[] = { 0.1647, 0.3882, 0.5216, 0.6549, 0.7255, 0.7490, 0.7294, 0.8078, 0.9843 };
+            float b[] = { 0.5294, 0.8824, 0.8314, 0.7765, 0.6196, 0.4510, 0.3373, 0.1804, 0.0549 };
+            Mat X = linspace(0, 1, 9);
+            this->_lut = ColorMap::linear_colormap(X,
+                    Mat(9, 1, CV_32FC1, r).clone(), // red
+                    Mat(9, 1, CV_32FC1, g).clone(), // green
+                    Mat(9, 1, CV_32FC1, b).clone(), // blue
+                    n);  // number of sample points
+        }
+    };
+
     void ColorMap::operator()(InputArray _src, OutputArray _dst) const
     {
         if(_lut.total() != 256)
@@ -514,6 +537,7 @@ namespace colormap
             colormap == COLORMAP_HSV ? (colormap::ColorMap*)(new colormap::HSV) :
             colormap == COLORMAP_JET ? (colormap::ColorMap*)(new colormap::Jet) :
             colormap == COLORMAP_OCEAN ? (colormap::ColorMap*)(new colormap::Ocean) :
+            colormap == COLORMAP_PARULA ? (colormap::ColorMap*)(new colormap::Parula) :
             colormap == COLORMAP_PINK ? (colormap::ColorMap*)(new colormap::Pink) :
             colormap == COLORMAP_RAINBOW ? (colormap::ColorMap*)(new colormap::Rainbow) :
             colormap == COLORMAP_SPRING ? (colormap::ColorMap*)(new colormap::Spring) :

@@ -135,7 +135,8 @@ bool CvCascadeClassifier::train( const string _cascadeDirName,
                                 const CvCascadeParams& _cascadeParams,
                                 const CvFeatureParams& _featureParams,
                                 const CvCascadeBoostParams& _stageParams,
-                                bool baseFormatSave )
+                                bool baseFormatSave,
+                                double acceptanceRatioBreakValue )
 {
     // Start recording clock ticks for training time output
     const clock_t begin_time = clock();
@@ -168,6 +169,13 @@ bool CvCascadeClassifier::train( const string _cascadeDirName,
         featureEvaluator = CvFeatureEvaluator::create(cascadeParams.featureType);
         featureEvaluator->init( featureParams, numPos + numNeg, cascadeParams.winSize );
         stageClassifiers.reserve( numStages );
+    }else{
+        // Make sure that if model parameters are preloaded, that people are aware of this,
+        // even when passing other parameters to the training command
+        cout << "---------------------------------------------------------------------------------" << endl;
+        cout << "Training parameters are pre-loaded from the parameter file in data folder!" << endl;
+        cout << "Please empty this folder if you want to use a NEW set of training parameters." << endl;
+        cout << "---------------------------------------------------------------------------------" << endl;
     }
     cout << "PARAMETERS:" << endl;
     cout << "cascadeDirName: " << _cascadeDirName << endl;
@@ -178,6 +186,7 @@ bool CvCascadeClassifier::train( const string _cascadeDirName,
     cout << "numStages: " << numStages << endl;
     cout << "precalcValBufSize[Mb] : " << _precalcValBufSize << endl;
     cout << "precalcIdxBufSize[Mb] : " << _precalcIdxBufSize << endl;
+    cout << "acceptanceRatioBreakValue : " << acceptanceRatioBreakValue << endl;
     cascadeParams.printAttrs();
     stageParams->printAttrs();
     featureParams->printAttrs();
@@ -200,13 +209,18 @@ bool CvCascadeClassifier::train( const string _cascadeDirName,
         if ( !updateTrainingSet( tempLeafFARate ) )
         {
             cout << "Train dataset for temp stage can not be filled. "
-                "Branch training terminated." << endl;
+                    "Branch training terminated." << endl;
             break;
         }
         if( tempLeafFARate <= requiredLeafFARate )
         {
             cout << "Required leaf false alarm rate achieved. "
-                 "Branch training terminated." << endl;
+                    "Branch training terminated." << endl;
+            break;
+        }
+        if( (tempLeafFARate <= acceptanceRatioBreakValue) && (acceptanceRatioBreakValue >= 0) ){
+            cout << "The required acceptanceRatio for the model has been reached to avoid overfitting of trainingdata. "
+                    "Branch training terminated." << endl;
             break;
         }
 

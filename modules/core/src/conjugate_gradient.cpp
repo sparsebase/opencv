@@ -46,6 +46,25 @@
 
 namespace cv
 {
+    double MinProblemSolver::Function::getGradientEps() const { return 1e-3; }
+    void MinProblemSolver::Function::getGradient(const double* x, double* grad)
+    {
+        double eps = getGradientEps();
+        int i, n = getDims();
+        AutoBuffer<double> x_buf(n);
+        double* x_ = x_buf;
+        for( i = 0; i < n; i++ )
+            x_[i] = x[i];
+        for( i = 0; i < n; i++ )
+        {
+            x_[i] = x[i] + eps;
+            double y1 = calc(x_);
+            x_[i] = x[i] - eps;
+            double y0 = calc(x_);
+            grad[i] = (y1 - y0)/(2*eps);
+            x_[i] = x[i];
+        }
+    }
 
 #define SEC_METHOD_ITERATIONS 4
 #define INITIAL_SEC_METHOD_SIGMA 0.1
@@ -136,7 +155,6 @@ namespace cv
         dprintf(("d first time\n"));print_matrix(d);
         dprintf(("r\n"));print_matrix(r);
 
-        double beta=0;
         for(int count=0;count<_termcrit.maxCount;count++){
             minimizeOnTheLine(_Function,proxy_x,d,minimizeOnTheLine_buf1,minimizeOnTheLine_buf2);
             r.copyTo(r_old);
@@ -147,7 +165,7 @@ namespace cv
                 break;
             }
             r_norm_sq=r_norm_sq*r_norm_sq;
-            beta=MAX(0.0,(r_norm_sq-r.dot(r_old))/r_norm_sq);
+            double beta=MAX(0.0,(r_norm_sq-r.dot(r_old))/r_norm_sq);
             d=r+beta*d;
         }
 

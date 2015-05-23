@@ -43,7 +43,6 @@
 namespace cv {
 namespace ml {
 
-NormalBayesClassifier::Params::Params() {}
 
 class NormalBayesClassifierImpl : public NormalBayesClassifier
 {
@@ -52,9 +51,6 @@ public:
     {
         nallvars = 0;
     }
-
-    void setParams(const Params&) {}
-    Params getParams() const { return Params(); }
 
     bool train( const Ptr<TrainData>& trainData, int flags )
     {
@@ -447,7 +443,7 @@ public:
     bool isTrained() const { return !avg.empty(); }
     bool isClassifier() const { return true; }
     int getVarCount() const { return nallvars; }
-    String getDefaultModelName() const { return "opencv_ml_nbayes"; }
+    String getDefaultName() const { return "opencv_ml_nbayes"; }
 
     int nallvars;
     Mat var_idx, cls_labels, c;
@@ -455,7 +451,7 @@ public:
 };
 
 
-Ptr<NormalBayesClassifier> NormalBayesClassifier::create(const Params&)
+Ptr<NormalBayesClassifier> NormalBayesClassifier::create()
 {
     Ptr<NormalBayesClassifierImpl> p = makePtr<NormalBayesClassifierImpl>();
     return p;

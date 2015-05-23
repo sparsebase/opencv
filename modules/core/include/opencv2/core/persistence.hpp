@@ -257,7 +257,7 @@ Here is how to read the file created by the code sample above:
             cout << " " << (int)lbpval[i];
         cout << ")" << endl;
     }
-    fs.release();
+    fs2.release();
 @endcode
 
 Format specification    {#format_spec}
@@ -660,6 +660,7 @@ CV_EXPORTS void write( FileStorage& fs, const String& name, const String& value 
 CV_EXPORTS void write( FileStorage& fs, const String& name, const Mat& value );
 CV_EXPORTS void write( FileStorage& fs, const String& name, const SparseMat& value );
 CV_EXPORTS void write( FileStorage& fs, const String& name, const std::vector<KeyPoint>& value);
+CV_EXPORTS void write( FileStorage& fs, const String& name, const std::vector<DMatch>& value);
 
 CV_EXPORTS void writeScalar( FileStorage& fs, int value );
 CV_EXPORTS void writeScalar( FileStorage& fs, float value );
@@ -678,6 +679,7 @@ CV_EXPORTS void read(const FileNode& node, String& value, const String& default_
 CV_EXPORTS void read(const FileNode& node, Mat& mat, const Mat& default_mat = Mat() );
 CV_EXPORTS void read(const FileNode& node, SparseMat& mat, const SparseMat& default_mat = SparseMat() );
 CV_EXPORTS void read(const FileNode& node, std::vector<KeyPoint>& keypoints);
+CV_EXPORTS void read(const FileNode& node, std::vector<DMatch>& matches);
 
 template<typename _Tp> static inline void read(const FileNode& node, Point_<_Tp>& value, const Point_<_Tp>& default_value)
 {
@@ -914,7 +916,7 @@ void write(FileStorage& fs, const Range& r )
 template<typename _Tp> static inline
 void write( FileStorage& fs, const std::vector<_Tp>& vec )
 {
-    internal::VecWriterProxy<_Tp, DataType<_Tp>::fmt != 0> w(&fs);
+    cv::internal::VecWriterProxy<_Tp, DataType<_Tp>::fmt != 0> w(&fs);
     w(vec);
 }
 
@@ -922,63 +924,63 @@ void write( FileStorage& fs, const std::vector<_Tp>& vec )
 template<typename _Tp> static inline
 void write(FileStorage& fs, const String& name, const Point_<_Tp>& pt )
 {
-    internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
+    cv::internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
     write(fs, pt);
 }
 
 template<typename _Tp> static inline
 void write(FileStorage& fs, const String& name, const Point3_<_Tp>& pt )
 {
-    internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
+    cv::internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
     write(fs, pt);
 }
 
 template<typename _Tp> static inline
 void write(FileStorage& fs, const String& name, const Size_<_Tp>& sz )
 {
-    internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
+    cv::internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
     write(fs, sz);
 }
 
 template<typename _Tp> static inline
 void write(FileStorage& fs, const String& name, const Complex<_Tp>& c )
 {
-    internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
+    cv::internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
     write(fs, c);
 }
 
 template<typename _Tp> static inline
 void write(FileStorage& fs, const String& name, const Rect_<_Tp>& r )
 {
-    internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
+    cv::internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
     write(fs, r);
 }
 
 template<typename _Tp, int cn> static inline
 void write(FileStorage& fs, const String& name, const Vec<_Tp, cn>& v )
 {
-    internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
+    cv::internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
     write(fs, v);
 }
 
 template<typename _Tp> static inline
 void write(FileStorage& fs, const String& name, const Scalar_<_Tp>& s )
 {
-    internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
+    cv::internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
     write(fs, s);
 }
 
 static inline
 void write(FileStorage& fs, const String& name, const Range& r )
 {
-    internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
+    cv::internal::WriteStructContext ws(fs, name, FileNode::SEQ+FileNode::FLOW);
     write(fs, r);
 }
 
 template<typename _Tp> static inline
 void write( FileStorage& fs, const String& name, const std::vector<_Tp>& vec )
 {
-    internal::WriteStructContext ws(fs, name, FileNode::SEQ+(DataType<_Tp>::fmt != 0 ? FileNode::FLOW : 0));
+    cv::internal::WriteStructContext ws(fs, name, FileNode::SEQ+(DataType<_Tp>::fmt != 0 ? FileNode::FLOW : 0));
     write(fs, vec);
 }
 
@@ -1030,7 +1032,7 @@ void read(const FileNode& node, short& value, short default_value)
 template<typename _Tp> static inline
 void read( FileNodeIterator& it, std::vector<_Tp>& vec, size_t maxCount = (size_t)INT_MAX )
 {
-    internal::VecReaderProxy<_Tp, DataType<_Tp>::fmt != 0> r(&it);
+    cv::internal::VecReaderProxy<_Tp, DataType<_Tp>::fmt != 0> r(&it);
     r(vec, maxCount);
 }
 
@@ -1101,7 +1103,7 @@ FileNodeIterator& operator >> (FileNodeIterator& it, _Tp& value)
 template<typename _Tp> static inline
 FileNodeIterator& operator >> (FileNodeIterator& it, std::vector<_Tp>& vec)
 {
-    internal::VecReaderProxy<_Tp, DataType<_Tp>::fmt != 0> r(&it);
+    cv::internal::VecReaderProxy<_Tp, DataType<_Tp>::fmt != 0> r(&it);
     r(vec, (size_t)INT_MAX);
     return it;
 }

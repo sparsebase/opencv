@@ -1324,7 +1324,7 @@ void cv::boxFilter( InputArray _src, OutputArray _dst, int ddepth,
             ksize.width = 1;
     }
 #ifdef HAVE_TEGRA_OPTIMIZATION
-    if ( tegra::box(src, dst, ksize, anchor, normalize, borderType) )
+    if ( tegra::useTegra() && tegra::box(src, dst, ksize, anchor, normalize, borderType) )
         return;
 #endif
 
@@ -1650,7 +1650,7 @@ void cv::GaussianBlur( InputArray _src, OutputArray _dst, Size ksize,
 #ifdef HAVE_TEGRA_OPTIMIZATION
     Mat src = _src.getMat();
     Mat dst = _dst.getMat();
-    if(sigma1 == 0 && sigma2 == 0 && tegra::gaussian(src, dst, ksize, borderType))
+    if(sigma1 == 0 && sigma2 == 0 && tegra::useTegra() && tegra::gaussian(src, dst, ksize, borderType))
         return;
 #endif
 
@@ -2698,7 +2698,7 @@ void cv::medianBlur( InputArray _src0, OutputArray _dst, int ksize )
 #endif
 
 #ifdef HAVE_TEGRA_OPTIMIZATION
-    if (tegra::medianBlur(src0, dst, ksize))
+    if (tegra::useTegra() && tegra::medianBlur(src0, dst, ksize))
         return;
 #endif
 
@@ -2770,7 +2770,7 @@ public:
         #if CV_SSE3
         int CV_DECL_ALIGNED(16) buf[4];
         float CV_DECL_ALIGNED(16) bufSum[4];
-        static const int CV_DECL_ALIGNED(16) bufSignMask[] = { 0x80000000, 0x80000000, 0x80000000, 0x80000000 };
+        static const unsigned int CV_DECL_ALIGNED(16) bufSignMask[] = { 0x80000000, 0x80000000, 0x80000000, 0x80000000 };
         bool haveSSE3 = checkHardwareSupport(CV_CPU_SSE3);
         #endif
 
@@ -2966,6 +2966,11 @@ static bool ocl_bilateralFilter_8u(InputArray _src, OutputArray _dst, int d,
                                    double sigma_color, double sigma_space,
                                    int borderType)
 {
+#ifdef ANDROID
+    if (ocl::Device::getDefault().isNVidia())
+        return false;
+#endif
+
     int type = _src.type(), depth = CV_MAT_DEPTH(type), cn = CV_MAT_CN(type);
     int i, j, maxk, radius;
 
@@ -3147,7 +3152,7 @@ public:
         #if CV_SSE3
         int CV_DECL_ALIGNED(16) idxBuf[4];
         float CV_DECL_ALIGNED(16) bufSum32[4];
-        static const int CV_DECL_ALIGNED(16) bufSignMask[] = { 0x80000000, 0x80000000, 0x80000000, 0x80000000 };
+        static const unsigned int CV_DECL_ALIGNED(16) bufSignMask[] = { 0x80000000, 0x80000000, 0x80000000, 0x80000000 };
         bool haveSSE3 = checkHardwareSupport(CV_CPU_SSE3);
         #endif
 

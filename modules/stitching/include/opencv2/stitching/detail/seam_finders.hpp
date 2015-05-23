@@ -106,6 +106,8 @@ protected:
 class CV_EXPORTS VoronoiSeamFinder : public PairwiseSeamFinder
 {
 public:
+    virtual void find(const std::vector<UMat> &src, const std::vector<Point> &corners,
+                      std::vector<UMat> &masks);
     virtual void find(const std::vector<Size> &size, const std::vector<Point> &corners,
                       std::vector<UMat> &masks);
 private:
@@ -249,7 +251,7 @@ private:
 };
 
 
-#ifdef HAVE_OPENCV_CUDA
+#ifdef HAVE_OPENCV_CUDALEGACY
 class CV_EXPORTS GraphCutSeamFinderGpu : public GraphCutSeamFinderBase, public PairwiseSeamFinder
 {
 public:

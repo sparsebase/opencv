@@ -260,6 +260,8 @@ CV_IMPL int cvInitSystem( int, char** )
         wasInitialized = 1;
     }
 
+    setlocale(LC_NUMERIC,"C");
+
     return 0;
 }
 
@@ -736,6 +738,11 @@ CV_IMPL int cvNamedWindow( const char* name, int flags )
 
     if( !(flags & CV_WINDOW_AUTOSIZE))//YV add border in order to resize the window
        defStyle |= WS_SIZEBOX;
+
+#ifdef HAVE_OPENGL
+    if (flags & CV_WINDOW_OPENGL)
+        defStyle |= WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+#endif
 
     icvLoadWindowPos( name, rect );
 

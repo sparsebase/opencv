@@ -159,8 +159,9 @@ void MatAllocator::copy(UMatData* usrc, UMatData* udst, int dims, const size_t s
         memcpy(ptrs[1], ptrs[0], planesz);
 }
 
-BufferPoolController* MatAllocator::getBufferPoolController() const
+BufferPoolController* MatAllocator::getBufferPoolController(const char* id) const
 {
+    (void)id;
     static DummyBufferPoolController dummy;
     return &dummy;
 }
@@ -204,9 +205,12 @@ public:
 
     void deallocate(UMatData* u) const
     {
+        if(!u)
+            return;
+
         CV_Assert(u->urefcount >= 0);
         CV_Assert(u->refcount >= 0);
-        if(u && u->refcount == 0)
+        if(u->refcount == 0)
         {
             if( !(u->flags & UMatData::USER_ALLOCATED) )
             {
@@ -218,11 +222,10 @@ public:
     }
 };
 
-
 MatAllocator* Mat::getStdAllocator()
 {
-    static MatAllocator * allocator = new StdMatAllocator();
-    return allocator;
+    static StdMatAllocator allocator;
+    return &allocator;
 }
 
 void swap( Mat& a, Mat& b )
@@ -1109,7 +1112,7 @@ void scalarToRawData(const Scalar& s, void* _buf, int type, int unroll_to)
                                         Input/Output Array
 \*************************************************************************************************/
 
-Mat _InputArray::getMat(int i) const
+Mat _InputArray::getMat_(int i) const
 {
     int k = kind();
     int accessFlags = flags & ACCESS_MASK;
@@ -1149,6 +1152,21 @@ Mat _InputArray::getMat(int i) const
         const std::vector<uchar>& v = *(const std::vector<uchar>*)obj;
 
         return !v.empty() ? Mat(size(), t, (void*)&v[0]) : Mat();
+    }
+
+    if( k == STD_BOOL_VECTOR )
+    {
+        CV_Assert( i < 0 );
+        int t = CV_8U;
+        const std::vector<bool>& v = *(const std::vector<bool>*)obj;
+        int j, n = (int)v.size();
+        if( n == 0 )
+            return Mat();
+        Mat m(1, n, t);
+        uchar* dst = m.data;
+        for( j = 0; j < n; j++ )
+            dst[j] = (uchar)v[j];
+        return m;
     }
 
     if( k == NONE )
@@ -1478,6 +1496,13 @@ Size _InputArray::size(int i) const
         return szb == szi ? Size((int)szb, 1) : Size((int)(szb/CV_ELEM_SIZE(flags)), 1);
     }
 
+    if( k == STD_BOOL_VECTOR )
+    {
+        CV_Assert( i < 0 );
+        const std::vector<bool>& v = *(const std::vector<bool>*)obj;
+        return Size((int)v.size(), 1);
+    }
+
     if( k == NONE )
         return Size();
 
@@ -1658,7 +1683,7 @@ int _InputArray::dims(int i) const
         return 2;
     }
 
-    if( k == STD_VECTOR )
+    if( k == STD_VECTOR || k == STD_BOOL_VECTOR )
     {
         CV_Assert( i < 0 );
         return 2;
@@ -1770,7 +1795,7 @@ int _InputArray::type(int i) const
     if( k == EXPR )
         return ((const MatExpr*)obj)->type();
 
-    if( k == MATX || k == STD_VECTOR || k == STD_VECTOR_VECTOR )
+    if( k == MATX || k == STD_VECTOR || k == STD_VECTOR_VECTOR || k == STD_BOOL_VECTOR )
         return CV_MAT_TYPE(flags);
 
     if( k == NONE )
@@ -1845,6 +1870,12 @@ bool _InputArray::empty() const
         return v.empty();
     }
 
+    if( k == STD_BOOL_VECTOR )
+    {
+        const std::vector<bool>& v = *(const std::vector<bool>*)obj;
+        return v.empty();
+    }
+
     if( k == NONE )
         return true;
 
@@ -1889,7 +1920,8 @@ bool _InputArray::isContinuous(int i) const
     if( k == UMAT )
         return i < 0 ? ((const UMat*)obj)->isContinuous() : true;
 
-    if( k == EXPR || k == MATX || k == STD_VECTOR || k == NONE || k == STD_VECTOR_VECTOR)
+    if( k == EXPR || k == MATX || k == STD_VECTOR ||
+        k == NONE || k == STD_VECTOR_VECTOR || k == STD_BOOL_VECTOR )
         return true;
 
     if( k == STD_VECTOR_MAT )
@@ -1920,7 +1952,8 @@ bool _InputArray::isSubmatrix(int i) const
     if( k == UMAT )
         return i < 0 ? ((const UMat*)obj)->isSubmatrix() : false;
 
-    if( k == EXPR || k == MATX || k == STD_VECTOR || k == NONE || k == STD_VECTOR_VECTOR)
+    if( k == EXPR || k == MATX || k == STD_VECTOR ||
+        k == NONE || k == STD_VECTOR_VECTOR || k == STD_BOOL_VECTOR )
         return false;
 
     if( k == STD_VECTOR_MAT )
@@ -1958,7 +1991,8 @@ size_t _InputArray::offset(int i) const
         return ((const UMat*)obj)->offset;
     }
 
-    if( k == EXPR || k == MATX || k == STD_VECTOR || k == NONE || k == STD_VECTOR_VECTOR)
+    if( k == EXPR || k == MATX || k == STD_VECTOR ||
+        k == NONE || k == STD_VECTOR_VECTOR || k == STD_BOOL_VECTOR )
         return 0;
 
     if( k == STD_VECTOR_MAT )
@@ -2005,7 +2039,8 @@ size_t _InputArray::step(int i) const
         return ((const UMat*)obj)->step;
     }
 
-    if( k == EXPR || k == MATX || k == STD_VECTOR || k == NONE || k == STD_VECTOR_VECTOR)
+    if( k == EXPR || k == MATX || k == STD_VECTOR ||
+        k == NONE || k == STD_VECTOR_VECTOR || k == STD_BOOL_VECTOR )
         return 0;
 
     if( k == STD_VECTOR_MAT )
@@ -2040,7 +2075,7 @@ void _InputArray::copyTo(const _OutputArray& arr) const
 
     if( k == NONE )
         arr.release();
-    else if( k == MAT || k == MATX || k == STD_VECTOR )
+    else if( k == MAT || k == MATX || k == STD_VECTOR || k == STD_BOOL_VECTOR )
     {
         Mat m = getMat();
         m.copyTo(arr);
@@ -2065,7 +2100,7 @@ void _InputArray::copyTo(const _OutputArray& arr, const _InputArray & mask) cons
 
     if( k == NONE )
         arr.release();
-    else if( k == MAT || k == MATX || k == STD_VECTOR )
+    else if( k == MAT || k == MATX || k == STD_VECTOR || k == STD_BOOL_VECTOR )
     {
         Mat m = getMat();
         m.copyTo(arr, mask);
@@ -4679,8 +4714,8 @@ SparseMat::Hdr::Hdr( int _dims, const int* _sizes, int _type )
     refcount = 1;
 
     dims = _dims;
-    valueOffset = (int)alignSize(sizeof(SparseMat::Node) +
-        sizeof(int)*std::max(dims - CV_MAX_DIM, 0), CV_ELEM_SIZE1(_type));
+    valueOffset = (int)alignSize(sizeof(SparseMat::Node) - MAX_DIM*sizeof(int) +
+                                 dims*sizeof(int), CV_ELEM_SIZE1(_type));
     nodeSize = alignSize(valueOffset +
         CV_ELEM_SIZE(_type), (int)sizeof(size_t));
 
@@ -4781,7 +4816,8 @@ void SparseMat::copyTo( SparseMat& m ) const
 void SparseMat::copyTo( Mat& m ) const
 {
     CV_Assert( hdr );
-    m.create( dims(), hdr->size, type() );
+    int ndims = dims();
+    m.create( ndims, hdr->size, type() );
     m = Scalar(0);
 
     SparseMatConstIterator from = begin();
@@ -4790,7 +4826,7 @@ void SparseMat::copyTo( Mat& m ) const
     for( i = 0; i < N; i++, ++from )
     {
         const Node* n = from.node();
-        copyElem( from.ptr, m.ptr(n->idx), esz);
+        copyElem( from.ptr, (ndims > 1 ? m.ptr(n->idx) : m.ptr(n->idx[0])), esz);
     }
 }
 
@@ -5079,7 +5115,8 @@ uchar* SparseMat::newNode(const int* idx, size_t hashval)
     if( !hdr->freeList )
     {
         size_t i, nsz = hdr->nodeSize, psize = hdr->pool.size(),
-            newpsize = std::max(psize*2, 8*nsz);
+            newpsize = std::max(psize*3/2, 8*nsz);
+        newpsize = (newpsize/nsz)*nsz;
         hdr->pool.resize(newpsize);
         uchar* pool = &hdr->pool[0];
         hdr->freeList = std::max(psize, nsz);
