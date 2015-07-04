@@ -7,11 +7,13 @@
 //  copy or use the software.
 //
 //
-//                           License Agreement
+//                          License Agreement
 //                For Open Source Computer Vision Library
 //
 // Copyright (C) 2000-2008, Intel Corporation, all rights reserved.
 // Copyright (C) 2009, Willow Garage Inc., all rights reserved.
+// Copyright (C) 2013, OpenCV Foundation, all rights reserved.
+// Copyright (C) 2015, Itseez Inc., all rights reserved.
 // Third party copyrights are property of their respective owners.
 //
 // Redistribution and use in source and binary forms, with or without modification,
@@ -61,6 +63,8 @@ inline void _InputArray::init(int _flags, const void* _obj, Size _sz)
 { flags = _flags; obj = (void*)_obj; sz = _sz; }
 
 inline void* _InputArray::getObj() const { return obj; }
+inline int _InputArray::getFlags() const { return flags; }
+inline Size _InputArray::getSz() const { return sz; }
 
 inline _InputArray::_InputArray() { init(NONE, 0); }
 inline _InputArray::_InputArray(int _flags, void* _obj) { init(_flags, _obj); }
@@ -72,6 +76,10 @@ inline _InputArray::_InputArray(const std::vector<UMat>& vec) { init(STD_VECTOR_
 template<typename _Tp> inline
 _InputArray::_InputArray(const std::vector<_Tp>& vec)
 { init(FIXED_TYPE + STD_VECTOR + DataType<_Tp>::type + ACCESS_READ, &vec); }
+
+inline
+_InputArray::_InputArray(const std::vector<bool>& vec)
+{ init(FIXED_TYPE + STD_BOOL_VECTOR + DataType<bool>::type + ACCESS_READ, &vec); }
 
 template<typename _Tp> inline
 _InputArray::_InputArray(const std::vector<std::vector<_Tp> >& vec)
@@ -110,6 +118,13 @@ inline _InputArray::_InputArray(const cuda::HostMem& cuda_mem)
 
 inline _InputArray::~_InputArray() {}
 
+inline Mat _InputArray::getMat(int i) const
+{
+    if( kind() == MAT && i < 0 )
+        return *(const Mat*)obj;
+    return getMat_(i);
+}
+
 inline bool _InputArray::isMat() const { return kind() == _InputArray::MAT; }
 inline bool _InputArray::isUMat() const  { return kind() == _InputArray::UMAT; }
 inline bool _InputArray::isMatVector() const { return kind() == _InputArray::STD_VECTOR_MAT; }
@@ -128,6 +143,10 @@ inline _OutputArray::_OutputArray(std::vector<UMat>& vec) { init(STD_VECTOR_UMAT
 template<typename _Tp> inline
 _OutputArray::_OutputArray(std::vector<_Tp>& vec)
 { init(FIXED_TYPE + STD_VECTOR + DataType<_Tp>::type + ACCESS_WRITE, &vec); }
+
+inline
+_OutputArray::_OutputArray(std::vector<bool>&)
+{ CV_Error(Error::StsUnsupportedFormat, "std::vector<bool> cannot be an output array\n"); }
 
 template<typename _Tp> inline
 _OutputArray::_OutputArray(std::vector<std::vector<_Tp> >& vec)
@@ -215,6 +234,9 @@ inline _InputOutputArray::_InputOutputArray(std::vector<UMat>& vec) { init(STD_V
 template<typename _Tp> inline
 _InputOutputArray::_InputOutputArray(std::vector<_Tp>& vec)
 { init(FIXED_TYPE + STD_VECTOR + DataType<_Tp>::type + ACCESS_RW, &vec); }
+
+inline _InputOutputArray::_InputOutputArray(std::vector<bool>&)
+{ CV_Error(Error::StsUnsupportedFormat, "std::vector<bool> cannot be an input/output array\n"); }
 
 template<typename _Tp> inline
 _InputOutputArray::_InputOutputArray(std::vector<std::vector<_Tp> >& vec)
@@ -1074,6 +1096,12 @@ void Mat::push_back(const Mat_<_Tp>& m)
     push_back((const Mat&)m);
 }
 
+template<> inline
+void Mat::push_back(const MatExpr& expr)
+{
+    push_back(static_cast<Mat>(expr));
+}
+
 ///////////////////////////// MatSize ////////////////////////////
 
 inline
@@ -1453,13 +1481,15 @@ Mat_<_Tp> Mat_<_Tp>::operator()( const Range* ranges ) const
 template<typename _Tp> inline
 _Tp* Mat_<_Tp>::operator [](int y)
 {
-    return (_Tp*)ptr(y);
+    CV_DbgAssert( 0 <= y && y < rows );
+    return (_Tp*)(data + y*step.p[0]);
 }
 
 template<typename _Tp> inline
 const _Tp* Mat_<_Tp>::operator [](int y) const
 {
-    return (const _Tp*)ptr(y);
+    CV_DbgAssert( 0 <= y && y < rows );
+    return (const _Tp*)(data + y*step.p[0]);
 }
 
 template<typename _Tp> inline
@@ -1562,7 +1592,13 @@ template<typename _Tp> template<int n> inline
 Mat_<_Tp>::operator Vec<typename DataType<_Tp>::channel_type, n>() const
 {
     CV_Assert(n % DataType<_Tp>::channels == 0);
+
+#if defined _MSC_VER
+    const Mat* pMat = (const Mat*)this; // workaround for MSVS <= 2012 compiler bugs (but GCC 4.6 dislikes this workaround)
+    return pMat->operator Vec<typename DataType<_Tp>::channel_type, n>();
+#else
     return this->Mat::operator Vec<typename DataType<_Tp>::channel_type, n>();
+#endif
 }
 
 template<typename _Tp> template<int m, int n> inline
@@ -1570,8 +1606,14 @@ Mat_<_Tp>::operator Matx<typename DataType<_Tp>::channel_type, m, n>() const
 {
     CV_Assert(n % DataType<_Tp>::channels == 0);
 
+#if defined _MSC_VER
+    const Mat* pMat = (const Mat*)this; // workaround for MSVS <= 2012 compiler bugs (but GCC 4.6 dislikes this workaround)
+    Matx<typename DataType<_Tp>::channel_type, m, n> res = pMat->operator Matx<typename DataType<_Tp>::channel_type, m, n>();
+    return res;
+#else
     Matx<typename DataType<_Tp>::channel_type, m, n> res = this->Mat::operator Matx<typename DataType<_Tp>::channel_type, m, n>();
     return res;
+#endif
 }
 
 template<typename _Tp> inline

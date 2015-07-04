@@ -42,6 +42,8 @@
 
 #include "test_precomp.hpp"
 
+#include <fstream>
+
 using namespace cv;
 using namespace std;
 
@@ -87,6 +89,9 @@ TEST(Imgcodecs_imread, regression)
 {
     const char* const filenames[] =
     {
+#ifdef HAVE_JASPER
+        "Rome.jp2",
+#endif
         "color_palette_alpha.png",
         "multipage.tif",
         "rle.hdr",
@@ -99,15 +104,31 @@ TEST(Imgcodecs_imread, regression)
 
     for (size_t i = 0; i < sizeof(filenames) / sizeof(filenames[0]); ++i)
     {
-        ASSERT_TRUE(imread_compare(folder + string(filenames[i]), IMREAD_UNCHANGED));
-        ASSERT_TRUE(imread_compare(folder + string(filenames[i]), IMREAD_GRAYSCALE));
-        ASSERT_TRUE(imread_compare(folder + string(filenames[i]), IMREAD_COLOR));
-        ASSERT_TRUE(imread_compare(folder + string(filenames[i]), IMREAD_ANYDEPTH));
-        ASSERT_TRUE(imread_compare(folder + string(filenames[i]), IMREAD_ANYCOLOR));
-        if (i != 2) // GDAL does not support hdr
-            ASSERT_TRUE(imread_compare(folder + string(filenames[i]), IMREAD_LOAD_GDAL));
+        const string path = folder + string(filenames[i]);
+        ASSERT_TRUE(imread_compare(path, IMREAD_UNCHANGED));
+        ASSERT_TRUE(imread_compare(path, IMREAD_GRAYSCALE));
+        ASSERT_TRUE(imread_compare(path, IMREAD_COLOR));
+        ASSERT_TRUE(imread_compare(path, IMREAD_ANYDEPTH));
+        ASSERT_TRUE(imread_compare(path, IMREAD_ANYCOLOR));
+        if (path.substr(path.length() - 3) != "hdr")
+        {
+            // GDAL does not support hdr
+            ASSERT_TRUE(imread_compare(path, IMREAD_LOAD_GDAL));
+        }
     }
 }
+
+#ifdef HAVE_JASPER
+TEST(Imgcodecs_jasper, regression)
+{
+    const string folder = string(cvtest::TS::ptr()->get_data_path()) + "/readwrite/";
+
+    ASSERT_TRUE(imread_compare(folder + "Bretagne2.jp2", IMREAD_COLOR));
+    ASSERT_TRUE(imread_compare(folder + "Bretagne2.jp2", IMREAD_GRAYSCALE));
+    ASSERT_TRUE(imread_compare(folder + "Grey.jp2", IMREAD_COLOR));
+    ASSERT_TRUE(imread_compare(folder + "Grey.jp2", IMREAD_GRAYSCALE));
+}
+#endif
 
 class CV_GrfmtWriteBigImageTest : public cvtest::BaseTest
 {
@@ -652,6 +673,36 @@ public:
 TEST(Imgcodecs_Tiff, decode_tile_remainder)
 {
     CV_GrfmtReadTifTiledWithNotFullTiles test; test.safe_run();
+}
+
+TEST(Imgcodecs_Tiff, decode_infinite_rowsperstrip)
+{
+    const uchar sample_data[142] = {
+        0x49, 0x49, 0x2a, 0x00, 0x10, 0x00, 0x00, 0x00, 0x56, 0x54,
+        0x56, 0x5a, 0x59, 0x55, 0x5a, 0x00, 0x0a, 0x00, 0x00, 0x01,
+        0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x01, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x07, 0x00,
+        0x00, 0x00, 0x02, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x08, 0x00, 0x00, 0x00, 0x03, 0x01, 0x03, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x11, 0x01,
+        0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+        0x15, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x16, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0xff, 0xff, 0xff, 0xff, 0x17, 0x01, 0x04, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x1c, 0x01, 0x03, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00
+    };
+
+    const string filename = cv::tempfile(".tiff");
+    std::ofstream outfile(filename.c_str(), std::ofstream::binary);
+    outfile.write(reinterpret_cast<const char *>(sample_data), sizeof sample_data);
+    outfile.close();
+
+    EXPECT_NO_THROW(cv::imread(filename, IMREAD_UNCHANGED));
+
+    remove(filename.c_str());
 }
 
 class CV_GrfmtReadTifMultiPage : public cvtest::BaseTest

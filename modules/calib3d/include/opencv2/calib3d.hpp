@@ -166,7 +166,7 @@ pattern (every view is described by several 3D-2D point correspondences).
 
     \f[x' = (\theta_d / r) x \\ y' = (\theta_d / r) y \f]
 
-    Finally, convertion into pixel coordinates: The final pixel coordinates vector [u; v] where:
+    Finally, conversion into pixel coordinates: The final pixel coordinates vector [u; v] where:
 
     \f[u = f_x (x' + \alpha y') + c_x \\
     v = f_y yy + c_y\f]
@@ -184,7 +184,8 @@ namespace cv
 
 //! type of the robust estimation algorithm
 enum { LMEDS  = 4, //!< least-median algorithm
-       RANSAC = 8  //!< RANSAC algorithm
+       RANSAC = 8, //!< RANSAC algorithm
+       RHO    = 16 //!< RHO algorithm
      };
 
 enum { SOLVEPNP_ITERATIVE = 0,
@@ -265,8 +266,9 @@ a vector\<Point2f\> .
 -   **0** - a regular method using all the points
 -   **RANSAC** - RANSAC-based robust method
 -   **LMEDS** - Least-Median robust method
+-   **RHO**    - PROSAC-based robust method
 @param ransacReprojThreshold Maximum allowed reprojection error to treat a point pair as an inlier
-(used in the RANSAC method only). That is, if
+(used in the RANSAC and RHO methods only). That is, if
 \f[\| \texttt{dstPoints} _i -  \texttt{convertPointsHomogeneous} ( \texttt{H} * \texttt{srcPoints} _i) \|  >  \texttt{ransacReprojThreshold}\f]
 then the point \f$i\f$ is considered an outlier. If srcPoints and dstPoints are measured in pixels,
 it usually makes sense to set this parameter somewhere in the range of 1 to 10.
@@ -289,7 +291,7 @@ pairs to compute an initial homography estimate with a simple least-squares sche
 
 However, if not all of the point pairs ( \f$srcPoints_i\f$, \f$dstPoints_i\f$ ) fit the rigid perspective
 transformation (that is, there are some outliers), this initial estimate will be poor. In this case,
-you can use one of the two robust methods. Both methods, RANSAC and LMeDS , try many different
+you can use one of the three robust methods. The methods RANSAC, LMeDS and RHO try many different
 random subsets of the corresponding point pairs (of four pairs each), estimate the homography matrix
 using this subset and a simple least-square algorithm, and then compute the quality/goodness of the
 computed homography (which is the number of inliers for RANSAC or the median re-projection error for
@@ -300,7 +302,7 @@ Regardless of the method, robust or not, the computed homography matrix is refin
 inliers only in case of a robust method) with the Levenberg-Marquardt method to reduce the
 re-projection error even more.
 
-The method RANSAC can handle practically any ratio of outliers but it needs a threshold to
+The methods RANSAC and RHO can handle practically any ratio of outliers but need a threshold to
 distinguish inliers from outliers. The method LMeDS does not need any threshold but it works
 correctly only when there are more than 50% of inliers. Finally, if there are no outliers and the
 noise is rather small, use the default method (method=0).
@@ -695,19 +697,19 @@ CV_EXPORTS_W bool findCirclesGrid( InputArray image, Size patternSize,
 
 /** @brief Finds the camera intrinsic and extrinsic parameters from several views of a calibration pattern.
 
-@param objectPoints In the new interface it is a vector of vectors of calibration pattern points
-in the calibration pattern coordinate space. The outer vector contains as many elements as the
-number of the pattern views. If the same calibration pattern is shown in each view and it is fully
-visible, all the vectors will be the same. Although, it is possible to use partially occluded
-patterns, or even different patterns in different views. Then, the vectors will be different. The
-points are 3D, but since they are in a pattern coordinate system, then, if the rig is planar, it
-may make sense to put the model to a XY coordinate plane so that Z-coordinate of each input object
-point is 0.
+@param objectPoints In the new interface it is a vector of vectors of calibration pattern points in
+the calibration pattern coordinate space (e.g. std::vector<std::vector<cv::Vec3f>>). The outer
+vector contains as many elements as the number of the pattern views. If the same calibration pattern
+is shown in each view and it is fully visible, all the vectors will be the same. Although, it is
+possible to use partially occluded patterns, or even different patterns in different views. Then,
+the vectors will be different. The points are 3D, but since they are in a pattern coordinate system,
+then, if the rig is planar, it may make sense to put the model to a XY coordinate plane so that
+Z-coordinate of each input object point is 0.
 In the old interface all the vectors of object points from different views are concatenated
 together.
-@param imagePoints In the new interface it is a vector of vectors of the projections of
-calibration pattern points. imagePoints.size() and objectPoints.size() and imagePoints[i].size()
-must be equal to objectPoints[i].size() for each i.
+@param imagePoints In the new interface it is a vector of vectors of the projections of calibration
+pattern points (e.g. std::vector<std::vector<cv::Vec2f>>). imagePoints.size() and
+objectPoints.size() and imagePoints[i].size() must be equal to objectPoints[i].size() for each i.
 In the old interface all the vectors of object points from different views are concatenated
 together.
 @param imageSize Size of the image used only to initialize the intrinsic camera matrix.
@@ -717,11 +719,11 @@ and/or CV_CALIB_FIX_ASPECT_RATIO are specified, some or all of fx, fy, cx, cy mu
 initialized before calling the function.
 @param distCoeffs Output vector of distortion coefficients
 \f$(k_1, k_2, p_1, p_2[, k_3[, k_4, k_5, k_6],[s_1, s_2, s_3, s_4]])\f$ of 4, 5, 8 or 12 elements.
-@param rvecs Output vector of rotation vectors (see Rodrigues ) estimated for each pattern view.
-That is, each k-th rotation vector together with the corresponding k-th translation vector (see
-the next output parameter description) brings the calibration pattern from the model coordinate
-space (in which object points are specified) to the world coordinate space, that is, a real
-position of the calibration pattern in the k-th pattern view (k=0.. *M* -1).
+@param rvecs Output vector of rotation vectors (see Rodrigues ) estimated for each pattern view
+(e.g. std::vector<cv::Mat>>). That is, each k-th rotation vector together with the corresponding
+k-th translation vector (see the next output parameter description) brings the calibration pattern
+from the model coordinate space (in which object points are specified) to the world coordinate
+space, that is, a real position of the calibration pattern in the k-th pattern view (k=0.. *M* -1).
 @param tvecs Output vector of translation vectors estimated for each pattern view.
 @param flags Different flags that may be zero or a combination of the following values:
 -   **CV_CALIB_USE_INTRINSIC_GUESS** cameraMatrix contains valid initial values of
@@ -1198,7 +1200,7 @@ for the other points. The array is computed only in the RANSAC and LMedS methods
 This function estimates essential matrix based on the five-point algorithm solver in @cite Nister03 .
 @cite SteweniusCFS is also a related. The epipolar geometry is described by the following equation:
 
-\f[[p_2; 1]^T K^T E K [p_1; 1] = 0 \\\f]\f[K =
+\f[[p_2; 1]^T K^{-T} E K^{-1} [p_1; 1] = 0 \\\f]\f[K =
 \begin{bmatrix}
 f & 0 & x_{pp}  \\
 0 & f & y_{pp}  \\

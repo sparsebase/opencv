@@ -74,7 +74,7 @@ available methods are 6:
 
 -#  **method=CV_TM_CCOEFF**
 
-    \f[R(x,y)= \sum _{x',y'} (T'(x',y')  \cdot I(x+x',y+y'))\f]
+    \f[R(x,y)= \sum _{x',y'} (T'(x',y')  \cdot I'(x+x',y+y'))\f]
 
     where
 
@@ -98,7 +98,7 @@ Code
 -   **Downloadable code**: Click
     [here](https://github.com/Itseez/opencv/tree/master/samples/cpp/tutorial_code/Histograms_Matching/MatchTemplate_Demo.cpp)
 -   **Code at glance:**
-    @includelineno samples/cpp/tutorial_code/Histograms_Matching/MatchTemplate_Demo.cpp
+    @include samples/cpp/tutorial_code/Histograms_Matching/MatchTemplate_Demo.cpp
 
 Explanation
 -----------

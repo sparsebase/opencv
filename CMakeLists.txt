@@ -45,6 +45,24 @@ endif(CMAKE_SYSTEM_NAME MATCHES WindowsPhone OR CMAKE_SYSTEM_NAME MATCHES Window
 
 if(WINRT)
   add_definitions(-DWINRT -DNO_GETENV)
+
+  # Making definitions available to other configurations and
+  # to filter dependency restrictions at compile time.
+  if(CMAKE_SYSTEM_NAME MATCHES WindowsPhone)
+    set(WINRT_PHONE TRUE)
+    add_definitions(-DWINRT_PHONE)
+  elseif(CMAKE_SYSTEM_NAME MATCHES WindowsStore)
+    set(WINRT_STORE TRUE)
+    add_definitions(-DWINRT_STORE)
+  endif()
+
+  if(CMAKE_SYSTEM_VERSION MATCHES 8.1)
+    set(WINRT_8_1 TRUE)
+    add_definitions(-DWINRT_8_1)
+  elseif(CMAKE_SYSTEM_VERSION MATCHES 8.0)
+    set(WINRT_8_0 TRUE)
+    add_definitions(-DWINRT_8_0)
+  endif()
 endif()
 
 if(POLICY CMP0022)
@@ -54,6 +72,11 @@ endif()
 if(POLICY CMP0026)
   # silence cmake 3.0+ warnings about reading LOCATION attribute
   cmake_policy(SET CMP0026 OLD)
+endif()
+
+if (POLICY CMP0042)
+  # silence cmake 3.0+ warnings about MACOSX_RPATH
+  cmake_policy(SET CMP0042 OLD)
 endif()
 
 # must go before the project command
@@ -165,6 +188,7 @@ OCV_OPTION(WITH_QUICKTIME      "Use QuickTime for Video I/O insted of QTKit" OFF
 OCV_OPTION(WITH_TBB            "Include Intel TBB support"                   OFF  IF (NOT IOS AND NOT WINRT) )
 OCV_OPTION(WITH_OPENMP         "Include OpenMP support"                      OFF)
 OCV_OPTION(WITH_CSTRIPES       "Include C= support"                          OFF  IF (WIN32 AND NOT WINRT)  )
+OCV_OPTION(WITH_PTHREADS_PF    "Use pthreads-based parallel_for"             ON   IF (NOT WIN32) )
 OCV_OPTION(WITH_TIFF           "Include TIFF support"                        ON   IF (NOT IOS) )
 OCV_OPTION(WITH_UNICAP         "Include Unicap support (GPL)"                OFF  IF (UNIX AND NOT APPLE AND NOT ANDROID) )
 OCV_OPTION(WITH_V4L            "Include Video 4 Linux support"               ON   IF (UNIX AND NOT ANDROID) )
@@ -182,6 +206,7 @@ OCV_OPTION(WITH_DIRECTX        "Include DirectX support"                     ON 
 OCV_OPTION(WITH_INTELPERC      "Include Intel Perceptual Computing support"  OFF  IF (WIN32 AND NOT WINRT) )
 OCV_OPTION(WITH_IPP_A          "Include Intel IPP_A support"                 OFF  IF (MSVC OR X86 OR X86_64) )
 OCV_OPTION(WITH_GDAL           "Include GDAL Support"                        OFF  IF (NOT ANDROID AND NOT IOS AND NOT WINRT) )
+OCV_OPTION(WITH_GPHOTO2        "Include gPhoto2 library support"             ON   IF (UNIX AND NOT ANDROID) )
 
 # OpenCV build components
 # ===================================================
@@ -191,14 +216,13 @@ OCV_OPTION(BUILD_ANDROID_EXAMPLES   "Build examples for Android platform"       
 OCV_OPTION(BUILD_DOCS               "Create build rules for OpenCV Documentation" ON  IF NOT WINRT)
 OCV_OPTION(BUILD_EXAMPLES           "Build all examples"                          OFF )
 OCV_OPTION(BUILD_PACKAGE            "Enables 'make package_source' command"       ON  IF NOT WINRT)
-OCV_OPTION(BUILD_PERF_TESTS         "Build performance tests"                     ON  IF (NOT IOS AND NOT WINRT) )
-OCV_OPTION(BUILD_TESTS              "Build accuracy & regression tests"           ON  IF (NOT IOS AND NOT WINRT) )
+OCV_OPTION(BUILD_PERF_TESTS         "Build performance tests"                     ON  IF (NOT IOS) )
+OCV_OPTION(BUILD_TESTS              "Build accuracy & regression tests"           ON  IF (NOT IOS) )
 OCV_OPTION(BUILD_WITH_DEBUG_INFO    "Include debug info into debug libs (not MSCV only)" ON )
 OCV_OPTION(BUILD_WITH_STATIC_CRT    "Enables use of staticaly linked CRT for staticaly linked OpenCV" ON IF MSVC )
 OCV_OPTION(BUILD_WITH_DYNAMIC_IPP   "Enables dynamic linking of IPP (only for standalone IPP)" OFF )
 OCV_OPTION(BUILD_FAT_JAVA_LIB       "Create fat java wrapper containing the whole OpenCV library" ON IF NOT BUILD_SHARED_LIBS AND CMAKE_COMPILER_IS_GNUCXX )
-OCV_OPTION(BUILD_ANDROID_SERVICE    "Build OpenCV Manager for Google Play" OFF IF ANDROID AND ANDROID_SOURCE_TREE )
-OCV_OPTION(BUILD_ANDROID_PACKAGE    "Build platform-specific package for Google Play" OFF IF ANDROID )
+OCV_OPTION(BUILD_ANDROID_SERVICE    "Build OpenCV Manager for Google Play" OFF IF ANDROID )
 OCV_OPTION(BUILD_CUDA_STUBS         "Build CUDA modules stubs when no CUDA SDK" OFF  IF (NOT IOS) )
 
 # 3rd party libs
@@ -483,7 +507,7 @@ include(cmake/OpenCVModule.cmake)
 #  Detect endianness of build platform
 # ----------------------------------------------------------------------------
 
-if(CMAKE_SYSTEM_NAME STREQUAL iOS)
+if(IOS)
   # test_big_endian needs try_compile, which doesn't work for iOS
   # http://public.kitware.com/Bug/view.php?id=12288
   set(WORDS_BIGENDIAN 0)
@@ -613,14 +637,6 @@ if(ANDROID)
   add_subdirectory(platforms/android/service)
 endif()
 
-if(BUILD_ANDROID_PACKAGE)
-  add_subdirectory(platforms/android/package)
-endif()
-
-if (ANDROID)
-  add_subdirectory(platforms/android/libinfo)
-endif()
-
 # ----------------------------------------------------------------------------
 # Finalization: generate configuration-based files
 # ----------------------------------------------------------------------------
@@ -745,6 +761,11 @@ else()
 endif()
 status("    Precompiled headers:"     PCHSupport_FOUND AND ENABLE_PRECOMPILED_HEADERS THEN YES ELSE NO)
 
+# ========================== Dependencies ============================
+ocv_get_all_libs(deps_modules deps_extra deps_3rdparty)
+status("    Extra dependencies:" ${deps_extra})
+status("    3rdparty dependencies:" ${deps_3rdparty})
+
 # ========================== OpenCV modules ==========================
 status("")
 status("  OpenCV modules:")
@@ -787,7 +808,7 @@ if(ANDROID)
     status("    Android toolchain:" "${ANDROID_STANDALONE_TOOLCHAIN}")
   endif()
   status("    android tool:"  ANDROID_EXECUTABLE  THEN "${ANDROID_EXECUTABLE} (${ANDROID_TOOLS_Pkg_Desc})" ELSE NO)
-  status("    Google Play package:" BUILD_ANDROID_PACKAGE                                         THEN YES ELSE NO)
+  status("    Google Play manager:" BUILD_ANDROID_SERVICE                                         THEN YES ELSE NO)
   status("    Android examples:"    BUILD_ANDROID_EXAMPLES AND CAN_BUILD_ANDROID_PROJECTS         THEN YES ELSE NO)
 endif()
 
@@ -885,7 +906,7 @@ else()
 endif()
 
 if( WITH_GDAL )
-  status("    GDAL:"   GDAL_FOUND THEN "${GDAL_LIBRARY}")
+  status("    GDAL:"   GDAL_FOUND THEN "${GDAL_LIBRARY}" ELSE "NO")
 else()
   status("    GDAL:"     "NO")
 endif()
@@ -903,15 +924,6 @@ if(DEFINED WITH_1394)
   status("    DC1394 2.x:"     HAVE_DC1394_2       THEN "YES (ver ${ALIASOF_libdc1394-2_VERSION})" ELSE NO)
 endif(DEFINED WITH_1394)
 
-if(ANDROID)
-  if(HAVE_opencv_androidcamera)
-    status("    AndroidNativeCamera:" BUILD_ANDROID_CAMERA_WRAPPER
-                                                   THEN "YES, build for Android${ANDROID_VERSION}" ELSE "YES, use prebuilt libraries")
-  else()
-    status("    AndroidNativeCamera:" "NO (native camera requires Android API level 8 or higher)")
-  endif()
-endif()
-
 if(DEFINED WITH_AVFOUNDATION)
   status("    AVFoundation:"   WITH_AVFOUNDATION   THEN YES                                        ELSE NO)
 endif(DEFINED WITH_AVFOUNDATION)
@@ -926,6 +938,7 @@ if(DEFINED WITH_FFMPEG)
   status("      format:"       HAVE_FFMPEG_FORMAT  THEN "YES (ver ${ALIASOF_libavformat_VERSION})" ELSE NO)
   status("      util:"         HAVE_FFMPEG_UTIL    THEN "YES (ver ${ALIASOF_libavutil_VERSION})"   ELSE NO)
   status("      swscale:"      HAVE_FFMPEG_SWSCALE THEN "YES (ver ${ALIASOF_libswscale_VERSION})"  ELSE NO)
+  status("      resample:"     HAVE_FFMPEG_RESAMPLE THEN "YES (ver ${ALIASOF_libavresample_VERSION})"  ELSE NO)
   status("      gentoo-style:" HAVE_GENTOO_FFMPEG  THEN YES                                        ELSE NO)
 endif(DEFINED WITH_FFMPEG)
 
@@ -983,8 +996,9 @@ if(DEFINED WITH_V4L)
   else()
     set(HAVE_CAMV4L2_STR "NO")
   endif()
-  status("    V4L/V4L2:"       HAVE_LIBV4L         THEN "Using libv4l (ver ${ALIASOF_libv4l1_VERSION})"
-                                                   ELSE "${HAVE_CAMV4L_STR}/${HAVE_CAMV4L2_STR}")
+  status("    V4L/V4L2:"       HAVE_LIBV4L
+             THEN "Using libv4l1 (ver ${ALIASOF_libv4l1_VERSION}) / libv4l2 (ver ${ALIASOF_libv4l2_VERSION})"
+             ELSE "${HAVE_CAMV4L_STR}/${HAVE_CAMV4L2_STR}")
 endif(DEFINED WITH_V4L)
 
 if(DEFINED WITH_DSHOW)
@@ -1007,6 +1021,31 @@ if(DEFINED WITH_INTELPERC)
   status("    Intel PerC:"     HAVE_INTELPERC      THEN "YES"                                 ELSE NO)
 endif(DEFINED WITH_INTELPERC)
 
+if(DEFINED WITH_GPHOTO2)
+  status("    gPhoto2:"        HAVE_GPHOTO2        THEN "YES"                                 ELSE NO)
+endif(DEFINED WITH_GPHOTO2)
+
+
+# Order is similar to CV_PARALLEL_FRAMEWORK in core/src/parallel.cpp
+ocv_clear_vars(CV_PARALLEL_FRAMEWORK)
+if(HAVE_TBB)
+  set(CV_PARALLEL_FRAMEWORK "TBB (ver ${TBB_VERSION_MAJOR}.${TBB_VERSION_MINOR} interface ${TBB_INTERFACE_VERSION})")
+elseif(HAVE_CSTRIPES)
+  set(CV_PARALLEL_FRAMEWORK "C=")
+elseif(HAVE_OPENMP)
+  set(CV_PARALLEL_FRAMEWORK "OpenMP")
+elseif(HAVE_GCD)
+  set(CV_PARALLEL_FRAMEWORK "GCD")
+elseif(WINRT OR HAVE_CONCURRENCY)
+  set(CV_PARALLEL_FRAMEWORK "Concurrency")
+elseif(HAVE_PTHREADS_PF)
+  set(CV_PARALLEL_FRAMEWORK "pthreads")
+else()
+  set(CV_PARALLEL_FRAMEWORK "none")
+endif()
+status("")
+status("  Parallel framework:" TRUE THEN "${CV_PARALLEL_FRAMEWORK}" ELSE NO)
+
 
 # ========================== Other third-party libraries ==========================
 status("")
@@ -1027,11 +1066,6 @@ status("    Use IPP Async:"  HAVE_IPP_A       THEN "YES" ELSE NO)
 endif(DEFINED WITH_IPP_A)
 
 status("    Use Eigen:"      HAVE_EIGEN       THEN "YES (ver ${EIGEN_WORLD_VERSION}.${EIGEN_MAJOR_VERSION}.${EIGEN_MINOR_VERSION})" ELSE NO)
-status("    Use TBB:"        HAVE_TBB         THEN "YES (ver ${TBB_VERSION_MAJOR}.${TBB_VERSION_MINOR} interface ${TBB_INTERFACE_VERSION})" ELSE NO)
-status("    Use OpenMP:"     HAVE_OPENMP      THEN YES ELSE NO)
-status("    Use GCD"         HAVE_GCD         THEN YES ELSE NO)
-status("    Use Concurrency" HAVE_CONCURRENCY THEN YES ELSE NO)
-status("    Use C=:"         HAVE_CSTRIPES    THEN YES ELSE NO)
 status("    Use Cuda:"       HAVE_CUDA        THEN "YES (ver ${CUDA_VERSION_STRING})" ELSE NO)
 status("    Use OpenCL:"     HAVE_OPENCL      THEN YES ELSE NO)
 

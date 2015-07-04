@@ -415,31 +415,6 @@ function(status text)
 endfunction()
 
 
-# splits cmake libraries list of format "general;item1;debug;item2;release;item3" to two lists
-macro(ocv_split_libs_list lst lstdbg lstopt)
-  set(${lstdbg} "")
-  set(${lstopt} "")
-  set(perv_keyword "")
-  foreach(word ${${lst}})
-    if(word STREQUAL "debug" OR word STREQUAL "optimized")
-      set(perv_keyword ${word})
-    elseif(word STREQUAL "general")
-      set(perv_keyword "")
-    elseif(perv_keyword STREQUAL "debug")
-      list(APPEND ${lstdbg} "${word}")
-      set(perv_keyword "")
-    elseif(perv_keyword STREQUAL "optimized")
-      list(APPEND ${lstopt} "${word}")
-      set(perv_keyword "")
-    else()
-      list(APPEND ${lstdbg} "${word}")
-      list(APPEND ${lstopt} "${word}")
-      set(perv_keyword "")
-    endif()
-  endforeach()
-endmacro()
-
-
 # remove all matching elements from the list
 macro(ocv_list_filterout lst regex)
   foreach(item ${${lst}})
@@ -810,3 +785,54 @@ function(ocv_add_library target)
 
   _ocv_append_target_includes(${target})
 endfunction()
+
+# build the list of opencv libs and dependencies for all modules
+#  _modules - variable to hold list of all modules
+#  _extra - variable to hold list of extra dependencies
+#  _3rdparty - variable to hold list of prebuilt 3rdparty libraries
+macro(ocv_get_all_libs _modules _extra _3rdparty)
+  set(${_modules} "")
+  set(${_extra} "")
+  set(${_3rdparty} "")
+  foreach(m ${OPENCV_MODULES_PUBLIC})
+    if(TARGET ${m})
+      get_target_property(deps ${m} INTERFACE_LINK_LIBRARIES)
+      if(NOT deps)
+        set(deps "")
+      endif()
+    else()
+      set(deps "")
+    endif()
+    list(INSERT ${_modules} 0 ${deps} ${m})
+    foreach (dep ${deps} ${OPENCV_LINKER_LIBS})
+      if (NOT DEFINED OPENCV_MODULE_${dep}_LOCATION)
+        if (TARGET ${dep})
+          get_target_property(_output ${dep} ARCHIVE_OUTPUT_DIRECTORY)
+          if ("${_output}" STREQUAL "${3P_LIBRARY_OUTPUT_PATH}")
+            list(INSERT ${_3rdparty} 0 ${dep})
+          else()
+            list(INSERT ${_extra} 0 ${dep})
+          endif()
+        else()
+          list(INSERT ${_extra} 0 ${dep})
+        endif()
+      endif()
+    endforeach()
+  endforeach()
+
+  # ippicv specific handling
+  list(FIND ${_extra} "ippicv" ippicv_idx)
+  if (${ippicv_idx} GREATER -1)
+    list(REMOVE_ITEM ${_extra} "ippicv")
+    list(INSERT ${_3rdparty} 0 "ippicv")
+  endif()
+
+  # split 3rdparty libs and modules
+  list(REMOVE_ITEM ${_modules} ${${_3rdparty}} ${${_extra}} non_empty_list)
+
+  # convert CMake lists to makefile literals
+  foreach(lst ${_modules} ${_3rdparty} ${_extra})
+    ocv_list_unique(${lst})
+    ocv_list_reverse(${lst})
+  endforeach()
+endmacro()

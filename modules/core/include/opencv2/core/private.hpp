@@ -136,14 +136,6 @@ namespace cv
 /* the alignment of all the allocated buffers */
 #define  CV_MALLOC_ALIGN    16
 
-#ifdef __GNUC__
-#  define CV_DECL_ALIGNED(x) __attribute__ ((aligned (x)))
-#elif defined _MSC_VER
-#  define CV_DECL_ALIGNED(x) __declspec(align(x))
-#else
-#  define CV_DECL_ALIGNED(x)
-#endif
-
 /* IEEE754 constants and macros */
 #define  CV_TOGGLE_FLT(x) ((x)^((int)(x) < 0 ? 0x7fffffff : 0))
 #define  CV_TOGGLE_DBL(x) ((x)^((int64)(x) < 0 ? CV_BIG_INT(0x7fffffffffffffff) : 0))
@@ -172,6 +164,27 @@ namespace cv
 CV_EXPORTS void scalarToRawData(const cv::Scalar& s, void* buf, int type, int unroll_to = 0);
 }
 
+// property implementation macros
+
+#define CV_IMPL_PROPERTY_RO(type, name, member) \
+    inline type get##name() const { return member; }
+
+#define CV_HELP_IMPL_PROPERTY(r_type, w_type, name, member) \
+    CV_IMPL_PROPERTY_RO(r_type, name, member) \
+    inline void set##name(w_type val) { member = val; }
+
+#define CV_HELP_WRAP_PROPERTY(r_type, w_type, name, internal_name, internal_obj) \
+    r_type get##name() const { return internal_obj.get##internal_name(); } \
+    void set##name(w_type val) { internal_obj.set##internal_name(val); }
+
+#define CV_IMPL_PROPERTY(type, name, member) CV_HELP_IMPL_PROPERTY(type, type, name, member)
+#define CV_IMPL_PROPERTY_S(type, name, member) CV_HELP_IMPL_PROPERTY(type, const type &, name, member)
+
+#define CV_WRAP_PROPERTY(type, name, internal_name, internal_obj)  CV_HELP_WRAP_PROPERTY(type, type, name, internal_name, internal_obj)
+#define CV_WRAP_PROPERTY_S(type, name, internal_name, internal_obj) CV_HELP_WRAP_PROPERTY(type, const type &, name, internal_name, internal_obj)
+
+#define CV_WRAP_SAME_PROPERTY(type, name, internal_obj) CV_WRAP_PROPERTY(type, name, name, internal_obj)
+#define CV_WRAP_SAME_PROPERTY_S(type, name, internal_obj) CV_WRAP_PROPERTY_S(type, name, name, internal_obj)
 
 /****************************************************************************************\
 *                     Structures and macros for integration with IPP                     *
@@ -182,7 +195,10 @@ CV_EXPORTS void scalarToRawData(const cv::Scalar& s, void* buf, int type, int un
 
 #  define IPP_VERSION_X100 (IPP_VERSION_MAJOR * 100 + IPP_VERSION_MINOR)
 
-#define IPP_ALIGN 32 // required for AVX optimization
+#ifdef CV_MALLOC_ALIGN
+#undef CV_MALLOC_ALIGN
+#endif
+#define CV_MALLOC_ALIGN 32 // required for AVX optimization
 
 #define setIppErrorStatus() cv::ipp::setIppStatus(-1, CV_Func, __FILE__, __LINE__)
 
@@ -222,8 +238,66 @@ static inline IppDataType ippiGetDataType(int depth)
 #  define IPP_VERSION_X100 0
 #endif
 
+#ifdef HAVE_IPP_ICV_ONLY
+#define HAVE_ICV 1
+#else
+#define HAVE_ICV 0
+#endif
+
+
 #define CV_IPP_CHECK_COND (cv::ipp::useIPP())
 #define CV_IPP_CHECK() if(CV_IPP_CHECK_COND)
+
+#ifdef HAVE_IPP
+
+#ifdef CV_IPP_RUN_VERBOSE
+#define CV_IPP_RUN_(condition, func, ...)                                   \
+    {                                                                       \
+        if (cv::ipp::useIPP() && (condition) && func)                       \
+        {                                                                   \
+            printf("%s: IPP implementation is running\n", CV_Func);         \
+            fflush(stdout);                                                 \
+            CV_IMPL_ADD(CV_IMPL_IPP);                                       \
+            return __VA_ARGS__;                                             \
+        }                                                                   \
+        else                                                                \
+        {                                                                   \
+            printf("%s: Plain implementation is running\n", CV_Func);       \
+            fflush(stdout);                                                 \
+        }                                                                   \
+    }
+#elif defined CV_IPP_RUN_ASSERT
+#define CV_IPP_RUN_(condition, func, ...)                                   \
+    {                                                                       \
+        if (cv::ipp::useIPP() && (condition))                               \
+        {                                                                   \
+            if(func)                                                        \
+            {                                                               \
+                CV_IMPL_ADD(CV_IMPL_IPP);                                   \
+            }                                                               \
+            else                                                            \
+            {                                                               \
+                setIppErrorStatus();                                        \
+                CV_Error(cv::Error::StsAssert, #func);                      \
+            }                                                               \
+            return __VA_ARGS__;                                             \
+        }                                                                   \
+    }
+#else
+#define CV_IPP_RUN_(condition, func, ...)                                   \
+    if (cv::ipp::useIPP() && (condition) && func)                           \
+    {                                                                       \
+        CV_IMPL_ADD(CV_IMPL_IPP);                                           \
+        return __VA_ARGS__;                                                 \
+    }
+#endif
+
+#else
+#define CV_IPP_RUN_(condition, func, ...)
+#endif
+
+#define CV_IPP_RUN(condition, func, ...) CV_IPP_RUN_(condition, func, __VA_ARGS__)
+
 
 #ifndef IPPI_CALL
 #  define IPPI_CALL(func) CV_Assert((func) >= 0)

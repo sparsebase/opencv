@@ -28,6 +28,7 @@ endforeach(m)
 ocv_list_filterout(opencv_hdrs ".h$")
 ocv_list_filterout(opencv_hdrs "cuda")
 ocv_list_filterout(opencv_hdrs "cudev")
+ocv_list_filterout(opencv_hdrs "detection_based_tracker.hpp") # Conditional compilation
 
 set(cv2_generated_hdrs
     "${CMAKE_CURRENT_BINARY_DIR}/pyopencv_generated_include.h"
@@ -50,7 +51,11 @@ ocv_add_library(${the_module} SHARED ${PYTHON_SOURCE_DIR}/src2/cv2.cpp ${cv2_gen
 if(PYTHON_DEBUG_LIBRARIES AND NOT PYTHON_LIBRARIES MATCHES "optimized.*debug")
   ocv_target_link_libraries(${the_module} debug ${PYTHON_DEBUG_LIBRARIES} optimized ${PYTHON_LIBRARIES})
 else()
-  ocv_target_link_libraries(${the_module} ${PYTHON_LIBRARIES})
+  if(APPLE)
+    set_target_properties(${the_module} PROPERTIES LINK_FLAGS "-undefined dynamic_lookup")
+  else()
+    ocv_target_link_libraries(${the_module} ${PYTHON_LIBRARIES})
+  endif()
 endif()
 ocv_target_link_libraries(${the_module} ${OPENCV_MODULE_${the_module}_DEPS})
 

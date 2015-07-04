@@ -1189,6 +1189,52 @@ TEST(Core_Mat, reshape_1942)
     ASSERT_EQ(1, cn);
 }
 
+TEST(Core_Mat, push_back)
+{
+    Mat a = (Mat_<float>(1,2) << 3.4884074f, 1.4159607f);
+    Mat b = (Mat_<float>(1,2) << 0.78737736f, 2.3456569f);
+
+    a.push_back(b);
+
+    ASSERT_EQ(2, a.cols);
+    ASSERT_EQ(2, a.rows);
+
+    ASSERT_FLOAT_EQ(3.4884074f, a.at<float>(0, 0));
+    ASSERT_FLOAT_EQ(1.4159607f, a.at<float>(0, 1));
+    ASSERT_FLOAT_EQ(0.78737736f, a.at<float>(1, 0));
+    ASSERT_FLOAT_EQ(2.3456569f, a.at<float>(1, 1));
+
+    Mat c = (Mat_<float>(2,2) << -0.88010466f, 0.3009364f, 2.22399974f, -5.45933905f);
+
+    ASSERT_EQ(c.rows, a.cols);
+
+    a.push_back(c.t());
+
+    ASSERT_EQ(2, a.cols);
+    ASSERT_EQ(4, a.rows);
+
+    ASSERT_FLOAT_EQ(3.4884074f, a.at<float>(0, 0));
+    ASSERT_FLOAT_EQ(1.4159607f, a.at<float>(0, 1));
+    ASSERT_FLOAT_EQ(0.78737736f, a.at<float>(1, 0));
+    ASSERT_FLOAT_EQ(2.3456569f, a.at<float>(1, 1));
+    ASSERT_FLOAT_EQ(-0.88010466f, a.at<float>(2, 0));
+    ASSERT_FLOAT_EQ(2.22399974f, a.at<float>(2, 1));
+    ASSERT_FLOAT_EQ(0.3009364f, a.at<float>(3, 0));
+    ASSERT_FLOAT_EQ(-5.45933905f, a.at<float>(3, 1));
+
+    a.push_back(Mat::ones(2, 2, CV_32FC1));
+
+    ASSERT_EQ(6, a.rows);
+
+    for(int row=4; row<a.rows; row++) {
+
+        for(int col=0; col<a.cols; col++) {
+
+            ASSERT_FLOAT_EQ(1.f, a.at<float>(row, col));
+        }
+    }
+}
+
 TEST(Core_Mat, copyNx1ToVector)
 {
     cv::Mat_<uchar> src(5, 1);
@@ -1208,4 +1254,67 @@ TEST(Core_Mat, copyNx1ToVector)
     src.convertTo(dst16, CV_16U);
 
     ASSERT_PRED_FORMAT2(cvtest::MatComparator(0, 0), ref_dst16, cv::Mat_<ushort>(dst16));
+}
+
+TEST(Core_Matx, fromMat_)
+{
+    Mat_<double> a = (Mat_<double>(2,2) << 10, 11, 12, 13);
+    Matx22d b(a);
+    ASSERT_EQ( cvtest::norm(a, b, NORM_INF), 0.);
+}
+
+TEST(Core_InputArray, empty)
+{
+    vector<vector<Point> > data;
+    ASSERT_TRUE( _InputArray(data).empty() );
+}
+
+TEST(Core_CopyMask, bug1918)
+{
+    Mat_<unsigned char> tmpSrc(100,100);
+    tmpSrc = 124;
+    Mat_<unsigned char> tmpMask(100,100);
+    tmpMask = 255;
+    Mat_<unsigned char> tmpDst(100,100);
+    tmpDst = 2;
+    tmpSrc.copyTo(tmpDst,tmpMask);
+    ASSERT_EQ(sum(tmpDst)[0], 124*100*100);
+}
+
+TEST(Core_SVD, orthogonality)
+{
+    for( int i = 0; i < 2; i++ )
+    {
+        int type = i == 0 ? CV_32F : CV_64F;
+        Mat mat_D(2, 2, type);
+        mat_D.setTo(88.);
+        Mat mat_U, mat_W;
+        SVD::compute(mat_D, mat_W, mat_U, noArray(), SVD::FULL_UV);
+        mat_U *= mat_U.t();
+        ASSERT_LT(norm(mat_U, Mat::eye(2, 2, type), NORM_INF), 1e-5);
+    }
+}
+
+
+TEST(Core_SparseMat, footprint)
+{
+    int n = 1000000;
+    int sz[] = { n, n };
+    SparseMat m(2, sz, CV_64F);
+
+    int nodeSize0 = (int)m.hdr->nodeSize;
+    double dataSize0 = ((double)m.hdr->pool.size() + (double)m.hdr->hashtab.size()*sizeof(size_t))*1e-6;
+    printf("before: node size=%d bytes, data size=%.0f Mbytes\n", nodeSize0, dataSize0);
+
+    for (int i = 0; i < n; i++)
+    {
+        m.ref<double>(i, i) = 1;
+    }
+
+    double dataSize1 = ((double)m.hdr->pool.size() + (double)m.hdr->hashtab.size()*sizeof(size_t))*1e-6;
+    double threshold = (n*nodeSize0*1.6 + n*2.*sizeof(size_t))*1e-6;
+    printf("after: data size=%.0f Mbytes, threshold=%.0f MBytes\n", dataSize1, threshold);
+
+    ASSERT_LE((int)m.hdr->nodeSize, 32);
+    ASSERT_LE(dataSize1, threshold);
 }
