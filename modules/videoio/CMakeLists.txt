@@ -1,5 +1,5 @@
 set(the_description "Media I/O")
-ocv_add_module(videoio opencv_imgproc opencv_imgcodecs OPTIONAL opencv_androidcamera WRAP java python)
+ocv_add_module(videoio opencv_imgproc opencv_imgcodecs WRAP java python)
 
 # ----------------------------------------------------------------------------
 #  CMake file for videoio. See root CMakeLists.txt
@@ -33,7 +33,6 @@ file(GLOB videoio_ext_hdrs
     "${CMAKE_CURRENT_LIST_DIR}/include/opencv2/${name}/*.h")
 
 # Removing WinRT API headers by default
-status("  ${name}: Removing WinRT API headers by default")
 list(REMOVE_ITEM videoio_ext_hdrs "${CMAKE_CURRENT_LIST_DIR}/include/opencv2/${name}/cap_winrt.hpp")
 
 # Dependencies used by the implementation referenced
@@ -42,7 +41,7 @@ list(REMOVE_ITEM videoio_ext_hdrs "${CMAKE_CURRENT_LIST_DIR}/include/opencv2/${n
 if(DEFINED WINRT AND NOT DEFINED WINRT_8_0)
 
     # WinRT detected. Adding WinRT API header
-    status("  ${name}: WinRT detected. Adding WinRT API header")
+    message(STATUS "  ${name}: WinRT detected. Adding WinRT API header")
     list(APPEND videoio_ext_hdrs "${CMAKE_CURRENT_LIST_DIR}/include/opencv2/${name}/cap_winrt.hpp")
 
     # Adding WinRT internal sources and headers
@@ -117,11 +116,6 @@ if(HAVE_OPENNI2)
   ocv_include_directories(${OPENNI2_INCLUDE_DIR})
   list(APPEND VIDEOIO_LIBRARIES ${OPENNI2_LIBRARY})
 endif(HAVE_OPENNI2)
-
-if(HAVE_opencv_androidcamera)
-  list(APPEND videoio_srcs ${CMAKE_CURRENT_LIST_DIR}/src/cap_android.cpp)
-  add_definitions(-DHAVE_ANDROID_NATIVE_CAMERA)#TODO: remove this line
-endif(HAVE_opencv_androidcamera)
 
 if(HAVE_XIMEA)
   list(APPEND videoio_srcs ${CMAKE_CURRENT_LIST_DIR}/src/cap_ximea.cpp)

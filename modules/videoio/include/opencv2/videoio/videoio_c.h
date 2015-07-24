@@ -63,6 +63,9 @@ typedef struct CvCapture CvCapture;
 /* start capturing frames from video file */
 CVAPI(CvCapture*) cvCreateFileCapture( const char* filename );
 
+/* start capturing frames from video file. allows specifying a preferred API to use */
+CVAPI(CvCapture*) cvCreateFileCaptureWithPreference( const char* filename , int apiPreference);
+
 enum
 {
     CV_CAP_ANY      =0,     // autodetect
@@ -98,9 +101,9 @@ enum
     CV_CAP_OPENNI   =900,   // OpenNI (for Kinect)
     CV_CAP_OPENNI_ASUS =910,   // OpenNI (for Asus Xtion)
 
-    CV_CAP_ANDROID  =1000,  // Android
-    CV_CAP_ANDROID_BACK =CV_CAP_ANDROID+99, // Android back camera
-    CV_CAP_ANDROID_FRONT =CV_CAP_ANDROID+98, // Android front camera
+    CV_CAP_ANDROID  =1000,  // Android - not used
+    CV_CAP_ANDROID_BACK =CV_CAP_ANDROID+99, // Android back camera - not used
+    CV_CAP_ANDROID_FRONT =CV_CAP_ANDROID+98, // Android front camera - not used
 
     CV_CAP_XIAPI    =1100,   // XIMEA Camera API
 
@@ -111,8 +114,10 @@ enum
     CV_CAP_INTELPERC = 1500, // Intel Perceptual Computing
 
     CV_CAP_OPENNI2 = 1600,   // OpenNI2 (for Kinect)
-
-    CV_CAP_GPHOTO2 = 1700
+    CV_CAP_GPHOTO2 = 1700,
+    CV_CAP_GSTREAMER = 1800, // GStreamer
+    CV_CAP_FFMPEG = 1900,    // FFMPEG
+    CV_CAP_IMAGES = 2000     // OpenCV Image Sequence (e.g. img_%02d.jpg)
 };
 
 /* start capturing frames from camera: index = camera_index + domain_offset (CV_CAP_*) */
@@ -183,6 +188,7 @@ enum
     CV_CAP_PROP_ROLL          =35,
     CV_CAP_PROP_IRIS          =36,
     CV_CAP_PROP_SETTINGS      =37,
+    CV_CAP_PROP_BUFFERSIZE    =38,
 
     CV_CAP_PROP_AUTOGRAB      =1024, // property for videoio class CvCapture_Android only
     CV_CAP_PROP_SUPPORTED_PREVIEW_SIZES_STRING=1025, // readonly, tricky property, returns cpnst char* indeed
@@ -327,62 +333,6 @@ enum
     CV_CAP_OPENNI_SXGA_30HZ    = 2,
     CV_CAP_OPENNI_QVGA_30HZ    = 3,
     CV_CAP_OPENNI_QVGA_60HZ    = 4
-};
-
-//supported by Android camera output formats
-enum
-{
-    CV_CAP_ANDROID_COLOR_FRAME_BGR = 0, //BGR
-    CV_CAP_ANDROID_COLOR_FRAME = CV_CAP_ANDROID_COLOR_FRAME_BGR,
-    CV_CAP_ANDROID_GREY_FRAME  = 1,  //Y
-    CV_CAP_ANDROID_GRAY_FRAME  = CV_CAP_ANDROID_GREY_FRAME,
-    CV_CAP_ANDROID_COLOR_FRAME_RGB = 2,
-    CV_CAP_ANDROID_COLOR_FRAME_BGRA = 3,
-    CV_CAP_ANDROID_COLOR_FRAME_RGBA = 4
-};
-
-// supported Android camera flash modes
-enum
-{
-    CV_CAP_ANDROID_FLASH_MODE_AUTO = 0,
-    CV_CAP_ANDROID_FLASH_MODE_OFF,
-    CV_CAP_ANDROID_FLASH_MODE_ON,
-    CV_CAP_ANDROID_FLASH_MODE_RED_EYE,
-    CV_CAP_ANDROID_FLASH_MODE_TORCH
-};
-
-// supported Android camera focus modes
-enum
-{
-    CV_CAP_ANDROID_FOCUS_MODE_AUTO = 0,
-    CV_CAP_ANDROID_FOCUS_MODE_CONTINUOUS_PICTURE,
-    CV_CAP_ANDROID_FOCUS_MODE_CONTINUOUS_VIDEO,
-    CV_CAP_ANDROID_FOCUS_MODE_EDOF,
-    CV_CAP_ANDROID_FOCUS_MODE_FIXED,
-    CV_CAP_ANDROID_FOCUS_MODE_INFINITY,
-    CV_CAP_ANDROID_FOCUS_MODE_MACRO
-};
-
-// supported Android camera white balance modes
-enum
-{
-    CV_CAP_ANDROID_WHITE_BALANCE_AUTO = 0,
-    CV_CAP_ANDROID_WHITE_BALANCE_CLOUDY_DAYLIGHT,
-    CV_CAP_ANDROID_WHITE_BALANCE_DAYLIGHT,
-    CV_CAP_ANDROID_WHITE_BALANCE_FLUORESCENT,
-    CV_CAP_ANDROID_WHITE_BALANCE_INCANDESCENT,
-    CV_CAP_ANDROID_WHITE_BALANCE_SHADE,
-    CV_CAP_ANDROID_WHITE_BALANCE_TWILIGHT,
-    CV_CAP_ANDROID_WHITE_BALANCE_WARM_FLUORESCENT
-};
-
-// supported Android camera antibanding modes
-enum
-{
-    CV_CAP_ANDROID_ANTIBANDING_50HZ = 0,
-    CV_CAP_ANDROID_ANTIBANDING_60HZ,
-    CV_CAP_ANDROID_ANTIBANDING_AUTO,
-    CV_CAP_ANDROID_ANTIBANDING_OFF
 };
 
 enum

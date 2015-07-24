@@ -188,6 +188,7 @@ OCV_OPTION(WITH_QUICKTIME      "Use QuickTime for Video I/O insted of QTKit" OFF
 OCV_OPTION(WITH_TBB            "Include Intel TBB support"                   OFF  IF (NOT IOS AND NOT WINRT) )
 OCV_OPTION(WITH_OPENMP         "Include OpenMP support"                      OFF)
 OCV_OPTION(WITH_CSTRIPES       "Include C= support"                          OFF  IF (WIN32 AND NOT WINRT)  )
+OCV_OPTION(WITH_PTHREADS_PF    "Use pthreads-based parallel_for"             ON   IF (NOT WIN32) )
 OCV_OPTION(WITH_TIFF           "Include TIFF support"                        ON   IF (NOT IOS) )
 OCV_OPTION(WITH_UNICAP         "Include Unicap support (GPL)"                OFF  IF (UNIX AND NOT APPLE AND NOT ANDROID) )
 OCV_OPTION(WITH_V4L            "Include Video 4 Linux support"               ON   IF (UNIX AND NOT ANDROID) )
@@ -215,14 +216,13 @@ OCV_OPTION(BUILD_ANDROID_EXAMPLES   "Build examples for Android platform"       
 OCV_OPTION(BUILD_DOCS               "Create build rules for OpenCV Documentation" ON  IF NOT WINRT)
 OCV_OPTION(BUILD_EXAMPLES           "Build all examples"                          OFF )
 OCV_OPTION(BUILD_PACKAGE            "Enables 'make package_source' command"       ON  IF NOT WINRT)
-OCV_OPTION(BUILD_PERF_TESTS         "Build performance tests"                     ON  IF (NOT IOS AND NOT WINRT) )
-OCV_OPTION(BUILD_TESTS              "Build accuracy & regression tests"           ON  IF (NOT IOS AND NOT WINRT) )
+OCV_OPTION(BUILD_PERF_TESTS         "Build performance tests"                     ON  IF (NOT IOS) )
+OCV_OPTION(BUILD_TESTS              "Build accuracy & regression tests"           ON  IF (NOT IOS) )
 OCV_OPTION(BUILD_WITH_DEBUG_INFO    "Include debug info into debug libs (not MSCV only)" ON )
 OCV_OPTION(BUILD_WITH_STATIC_CRT    "Enables use of staticaly linked CRT for staticaly linked OpenCV" ON IF MSVC )
 OCV_OPTION(BUILD_WITH_DYNAMIC_IPP   "Enables dynamic linking of IPP (only for standalone IPP)" OFF )
 OCV_OPTION(BUILD_FAT_JAVA_LIB       "Create fat java wrapper containing the whole OpenCV library" ON IF NOT BUILD_SHARED_LIBS AND CMAKE_COMPILER_IS_GNUCXX )
-OCV_OPTION(BUILD_ANDROID_SERVICE    "Build OpenCV Manager for Google Play" OFF IF ANDROID AND ANDROID_SOURCE_TREE )
-OCV_OPTION(BUILD_ANDROID_PACKAGE    "Build platform-specific package for Google Play" OFF IF ANDROID )
+OCV_OPTION(BUILD_ANDROID_SERVICE    "Build OpenCV Manager for Google Play" OFF IF ANDROID )
 OCV_OPTION(BUILD_CUDA_STUBS         "Build CUDA modules stubs when no CUDA SDK" OFF  IF (NOT IOS) )
 
 # 3rd party libs
@@ -637,14 +637,6 @@ if(ANDROID)
   add_subdirectory(platforms/android/service)
 endif()
 
-if(BUILD_ANDROID_PACKAGE)
-  add_subdirectory(platforms/android/package)
-endif()
-
-if (ANDROID)
-  add_subdirectory(platforms/android/libinfo)
-endif()
-
 # ----------------------------------------------------------------------------
 # Finalization: generate configuration-based files
 # ----------------------------------------------------------------------------
@@ -769,6 +761,11 @@ else()
 endif()
 status("    Precompiled headers:"     PCHSupport_FOUND AND ENABLE_PRECOMPILED_HEADERS THEN YES ELSE NO)
 
+# ========================== Dependencies ============================
+ocv_get_all_libs(deps_modules deps_extra deps_3rdparty)
+status("    Extra dependencies:" ${deps_extra})
+status("    3rdparty dependencies:" ${deps_3rdparty})
+
 # ========================== OpenCV modules ==========================
 status("")
 status("  OpenCV modules:")
@@ -811,7 +808,7 @@ if(ANDROID)
     status("    Android toolchain:" "${ANDROID_STANDALONE_TOOLCHAIN}")
   endif()
   status("    android tool:"  ANDROID_EXECUTABLE  THEN "${ANDROID_EXECUTABLE} (${ANDROID_TOOLS_Pkg_Desc})" ELSE NO)
-  status("    Google Play package:" BUILD_ANDROID_PACKAGE                                         THEN YES ELSE NO)
+  status("    Google Play manager:" BUILD_ANDROID_SERVICE                                         THEN YES ELSE NO)
   status("    Android examples:"    BUILD_ANDROID_EXAMPLES AND CAN_BUILD_ANDROID_PROJECTS         THEN YES ELSE NO)
 endif()
 
@@ -909,7 +906,7 @@ else()
 endif()
 
 if( WITH_GDAL )
-  status("    GDAL:"   GDAL_FOUND THEN "${GDAL_LIBRARY}")
+  status("    GDAL:"   GDAL_FOUND THEN "${GDAL_LIBRARY}" ELSE "NO")
 else()
   status("    GDAL:"     "NO")
 endif()
@@ -926,15 +923,6 @@ if(DEFINED WITH_1394)
   status("    DC1394 1.x:"     HAVE_DC1394         THEN "YES (ver ${ALIASOF_libdc1394_VERSION})"   ELSE NO)
   status("    DC1394 2.x:"     HAVE_DC1394_2       THEN "YES (ver ${ALIASOF_libdc1394-2_VERSION})" ELSE NO)
 endif(DEFINED WITH_1394)
-
-if(ANDROID)
-  if(HAVE_opencv_androidcamera)
-    status("    AndroidNativeCamera:" BUILD_ANDROID_CAMERA_WRAPPER
-                                                   THEN "YES, build for Android${ANDROID_VERSION}" ELSE "YES, use prebuilt libraries")
-  else()
-    status("    AndroidNativeCamera:" "NO (native camera requires Android API level 8 or higher)")
-  endif()
-endif()
 
 if(DEFINED WITH_AVFOUNDATION)
   status("    AVFoundation:"   WITH_AVFOUNDATION   THEN YES                                        ELSE NO)
@@ -1038,6 +1026,27 @@ if(DEFINED WITH_GPHOTO2)
 endif(DEFINED WITH_GPHOTO2)
 
 
+# Order is similar to CV_PARALLEL_FRAMEWORK in core/src/parallel.cpp
+ocv_clear_vars(CV_PARALLEL_FRAMEWORK)
+if(HAVE_TBB)
+  set(CV_PARALLEL_FRAMEWORK "TBB (ver ${TBB_VERSION_MAJOR}.${TBB_VERSION_MINOR} interface ${TBB_INTERFACE_VERSION})")
+elseif(HAVE_CSTRIPES)
+  set(CV_PARALLEL_FRAMEWORK "C=")
+elseif(HAVE_OPENMP)
+  set(CV_PARALLEL_FRAMEWORK "OpenMP")
+elseif(HAVE_GCD)
+  set(CV_PARALLEL_FRAMEWORK "GCD")
+elseif(WINRT OR HAVE_CONCURRENCY)
+  set(CV_PARALLEL_FRAMEWORK "Concurrency")
+elseif(HAVE_PTHREADS_PF)
+  set(CV_PARALLEL_FRAMEWORK "pthreads")
+else()
+  set(CV_PARALLEL_FRAMEWORK "none")
+endif()
+status("")
+status("  Parallel framework:" TRUE THEN "${CV_PARALLEL_FRAMEWORK}" ELSE NO)
+
+
 # ========================== Other third-party libraries ==========================
 status("")
 status("  Other third-party libraries:")
@@ -1057,11 +1066,6 @@ status("    Use IPP Async:"  HAVE_IPP_A       THEN "YES" ELSE NO)
 endif(DEFINED WITH_IPP_A)
 
 status("    Use Eigen:"      HAVE_EIGEN       THEN "YES (ver ${EIGEN_WORLD_VERSION}.${EIGEN_MAJOR_VERSION}.${EIGEN_MINOR_VERSION})" ELSE NO)
-status("    Use TBB:"        HAVE_TBB         THEN "YES (ver ${TBB_VERSION_MAJOR}.${TBB_VERSION_MINOR} interface ${TBB_INTERFACE_VERSION})" ELSE NO)
-status("    Use OpenMP:"     HAVE_OPENMP      THEN YES ELSE NO)
-status("    Use GCD"         HAVE_GCD         THEN YES ELSE NO)
-status("    Use Concurrency" HAVE_CONCURRENCY THEN YES ELSE NO)
-status("    Use C=:"         HAVE_CSTRIPES    THEN YES ELSE NO)
 status("    Use Cuda:"       HAVE_CUDA        THEN "YES (ver ${CUDA_VERSION_STRING})" ELSE NO)
 status("    Use OpenCL:"     HAVE_OPENCL      THEN YES ELSE NO)
 
