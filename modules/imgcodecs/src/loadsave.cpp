@@ -234,10 +234,11 @@ enum { LOAD_CVMAT=0, LOAD_IMAGE=1, LOAD_MAT=2 };
  *                      LOAD_MAT=2
  *                    }
  * @param[in] mat Reference to C++ Mat object (If LOAD_MAT)
+ * @param[in] scale_denom Scale value
  *
 */
 static void*
-imread_( const String& filename, int flags, int hdrtype, Mat* mat=0 )
+imread_( const String& filename, int flags, int hdrtype, Mat* mat=0, int scale_denom=1 )
 {
     IplImage* image = 0;
     CvMat *matrix = 0;
@@ -260,6 +261,9 @@ imread_( const String& filename, int flags, int hdrtype, Mat* mat=0 )
     if( !decoder ){
         return 0;
     }
+
+    /// set the scale_denom in the driver
+    decoder->setScale( scale_denom );
 
     /// set the filename in the driver
     decoder->setSource(filename);
@@ -314,6 +318,12 @@ imread_( const String& filename, int flags, int hdrtype, Mat* mat=0 )
         if( mat )
             mat->release();
         return 0;
+    }
+
+    int testdecoder = decoder->setScale( scale_denom ); // if decoder is JpegDecoder then testdecoder will be 1
+    if( (scale_denom > 1 ) & ( testdecoder > 1 ) )
+    {
+        resize(*mat,*mat,Size(size.width/scale_denom,size.height/scale_denom));
     }
 
     return hdrtype == LOAD_CVMAT ? (void*)matrix :
@@ -374,15 +384,8 @@ imreadmulti_(const String& filename, int flags, std::vector<Mat>& mats)
                 type = CV_MAKETYPE(CV_MAT_DEPTH(type), 1);
         }
 
-        // established the required input image size.
-        CvSize size;
-        size.width = decoder->width();
-        size.height = decoder->height();
-
-        Mat mat;
-        mat.create(size.height, size.width, type);
-
         // read the image data
+        Mat mat(decoder->height(), decoder->width(), type);
         if (!decoder->readData(mat))
         {
             break;
@@ -413,6 +416,27 @@ Mat imread( const String& filename, int flags )
 
     /// load the data
     imread_( filename, flags, LOAD_MAT, &img );
+
+    /// return a reference to the data
+    return img;
+}
+
+/**
+ * Read an image and resize it
+ *
+ *  This function merely calls the actual implementation above and returns itself.
+ *
+ * @param[in] filename File to load
+ * @param[in] flags Flags you wish to set.
+ * @param[in] scale_denom Scale value
+*/
+Mat imread_reduced( const String& filename, int flags, int scale_denom )
+{
+    /// create the basic container
+    Mat img;
+
+    /// load the data
+    imread_( filename, flags, LOAD_MAT, &img, scale_denom );
 
     /// return a reference to the data
     return img;

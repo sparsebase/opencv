@@ -222,11 +222,9 @@ public:
     }
 };
 
-
 MatAllocator* Mat::getStdAllocator()
 {
-    static MatAllocator * allocator = new StdMatAllocator();
-    return allocator;
+    CV_SINGLETON_LAZY_INIT(MatAllocator, new StdMatAllocator())
 }
 
 void swap( Mat& a, Mat& b )
@@ -1113,7 +1111,7 @@ void scalarToRawData(const Scalar& s, void* _buf, int type, int unroll_to)
                                         Input/Output Array
 \*************************************************************************************************/
 
-Mat _InputArray::getMat(int i) const
+Mat _InputArray::getMat_(int i) const
 {
     int k = kind();
     int accessFlags = flags & ACCESS_MASK;
@@ -1153,6 +1151,21 @@ Mat _InputArray::getMat(int i) const
         const std::vector<uchar>& v = *(const std::vector<uchar>*)obj;
 
         return !v.empty() ? Mat(size(), t, (void*)&v[0]) : Mat();
+    }
+
+    if( k == STD_BOOL_VECTOR )
+    {
+        CV_Assert( i < 0 );
+        int t = CV_8U;
+        const std::vector<bool>& v = *(const std::vector<bool>*)obj;
+        int j, n = (int)v.size();
+        if( n == 0 )
+            return Mat();
+        Mat m(1, n, t);
+        uchar* dst = m.data;
+        for( j = 0; j < n; j++ )
+            dst[j] = (uchar)v[j];
+        return m;
     }
 
     if( k == NONE )
@@ -1482,6 +1495,13 @@ Size _InputArray::size(int i) const
         return szb == szi ? Size((int)szb, 1) : Size((int)(szb/CV_ELEM_SIZE(flags)), 1);
     }
 
+    if( k == STD_BOOL_VECTOR )
+    {
+        CV_Assert( i < 0 );
+        const std::vector<bool>& v = *(const std::vector<bool>*)obj;
+        return Size((int)v.size(), 1);
+    }
+
     if( k == NONE )
         return Size();
 
@@ -1662,7 +1682,7 @@ int _InputArray::dims(int i) const
         return 2;
     }
 
-    if( k == STD_VECTOR )
+    if( k == STD_VECTOR || k == STD_BOOL_VECTOR )
     {
         CV_Assert( i < 0 );
         return 2;
@@ -1774,7 +1794,7 @@ int _InputArray::type(int i) const
     if( k == EXPR )
         return ((const MatExpr*)obj)->type();
 
-    if( k == MATX || k == STD_VECTOR || k == STD_VECTOR_VECTOR )
+    if( k == MATX || k == STD_VECTOR || k == STD_VECTOR_VECTOR || k == STD_BOOL_VECTOR )
         return CV_MAT_TYPE(flags);
 
     if( k == NONE )
@@ -1849,6 +1869,12 @@ bool _InputArray::empty() const
         return v.empty();
     }
 
+    if( k == STD_BOOL_VECTOR )
+    {
+        const std::vector<bool>& v = *(const std::vector<bool>*)obj;
+        return v.empty();
+    }
+
     if( k == NONE )
         return true;
 
@@ -1893,7 +1919,8 @@ bool _InputArray::isContinuous(int i) const
     if( k == UMAT )
         return i < 0 ? ((const UMat*)obj)->isContinuous() : true;
 
-    if( k == EXPR || k == MATX || k == STD_VECTOR || k == NONE || k == STD_VECTOR_VECTOR)
+    if( k == EXPR || k == MATX || k == STD_VECTOR ||
+        k == NONE || k == STD_VECTOR_VECTOR || k == STD_BOOL_VECTOR )
         return true;
 
     if( k == STD_VECTOR_MAT )
@@ -1924,7 +1951,8 @@ bool _InputArray::isSubmatrix(int i) const
     if( k == UMAT )
         return i < 0 ? ((const UMat*)obj)->isSubmatrix() : false;
 
-    if( k == EXPR || k == MATX || k == STD_VECTOR || k == NONE || k == STD_VECTOR_VECTOR)
+    if( k == EXPR || k == MATX || k == STD_VECTOR ||
+        k == NONE || k == STD_VECTOR_VECTOR || k == STD_BOOL_VECTOR )
         return false;
 
     if( k == STD_VECTOR_MAT )
@@ -1962,7 +1990,8 @@ size_t _InputArray::offset(int i) const
         return ((const UMat*)obj)->offset;
     }
 
-    if( k == EXPR || k == MATX || k == STD_VECTOR || k == NONE || k == STD_VECTOR_VECTOR)
+    if( k == EXPR || k == MATX || k == STD_VECTOR ||
+        k == NONE || k == STD_VECTOR_VECTOR || k == STD_BOOL_VECTOR )
         return 0;
 
     if( k == STD_VECTOR_MAT )
@@ -2009,7 +2038,8 @@ size_t _InputArray::step(int i) const
         return ((const UMat*)obj)->step;
     }
 
-    if( k == EXPR || k == MATX || k == STD_VECTOR || k == NONE || k == STD_VECTOR_VECTOR)
+    if( k == EXPR || k == MATX || k == STD_VECTOR ||
+        k == NONE || k == STD_VECTOR_VECTOR || k == STD_BOOL_VECTOR )
         return 0;
 
     if( k == STD_VECTOR_MAT )
@@ -2044,7 +2074,7 @@ void _InputArray::copyTo(const _OutputArray& arr) const
 
     if( k == NONE )
         arr.release();
-    else if( k == MAT || k == MATX || k == STD_VECTOR )
+    else if( k == MAT || k == MATX || k == STD_VECTOR || k == STD_BOOL_VECTOR )
     {
         Mat m = getMat();
         m.copyTo(arr);
@@ -2069,7 +2099,7 @@ void _InputArray::copyTo(const _OutputArray& arr, const _InputArray & mask) cons
 
     if( k == NONE )
         arr.release();
-    else if( k == MAT || k == MATX || k == STD_VECTOR )
+    else if( k == MAT || k == MATX || k == STD_VECTOR || k == STD_BOOL_VECTOR )
     {
         Mat m = getMat();
         m.copyTo(arr, mask);
@@ -3057,7 +3087,73 @@ static bool ocl_transpose( InputArray _src, OutputArray _dst )
 
 #endif
 
+#ifdef HAVE_IPP
+static bool ipp_transpose( Mat &src, Mat &dst )
+{
+    int type = src.type();
+    typedef IppStatus (CV_STDCALL * ippiTranspose)(const void * pSrc, int srcStep, void * pDst, int dstStep, IppiSize roiSize);
+    typedef IppStatus (CV_STDCALL * ippiTransposeI)(const void * pSrcDst, int srcDstStep, IppiSize roiSize);
+    ippiTranspose ippFunc = 0;
+    ippiTransposeI ippFuncI = 0;
+
+    if (dst.data == src.data && dst.cols == dst.rows)
+    {
+        CV_SUPPRESS_DEPRECATED_START
+        ippFuncI =
+            type == CV_8UC1 ? (ippiTransposeI)ippiTranspose_8u_C1IR :
+            type == CV_8UC3 ? (ippiTransposeI)ippiTranspose_8u_C3IR :
+            type == CV_8UC4 ? (ippiTransposeI)ippiTranspose_8u_C4IR :
+            type == CV_16UC1 ? (ippiTransposeI)ippiTranspose_16u_C1IR :
+            type == CV_16UC3 ? (ippiTransposeI)ippiTranspose_16u_C3IR :
+            type == CV_16UC4 ? (ippiTransposeI)ippiTranspose_16u_C4IR :
+            type == CV_16SC1 ? (ippiTransposeI)ippiTranspose_16s_C1IR :
+            type == CV_16SC3 ? (ippiTransposeI)ippiTranspose_16s_C3IR :
+            type == CV_16SC4 ? (ippiTransposeI)ippiTranspose_16s_C4IR :
+            type == CV_32SC1 ? (ippiTransposeI)ippiTranspose_32s_C1IR :
+            type == CV_32SC3 ? (ippiTransposeI)ippiTranspose_32s_C3IR :
+            type == CV_32SC4 ? (ippiTransposeI)ippiTranspose_32s_C4IR :
+            type == CV_32FC1 ? (ippiTransposeI)ippiTranspose_32f_C1IR :
+            type == CV_32FC3 ? (ippiTransposeI)ippiTranspose_32f_C3IR :
+            type == CV_32FC4 ? (ippiTransposeI)ippiTranspose_32f_C4IR : 0;
+        CV_SUPPRESS_DEPRECATED_END
+    }
+    else
+    {
+        ippFunc =
+            type == CV_8UC1 ? (ippiTranspose)ippiTranspose_8u_C1R :
+            type == CV_8UC3 ? (ippiTranspose)ippiTranspose_8u_C3R :
+            type == CV_8UC4 ? (ippiTranspose)ippiTranspose_8u_C4R :
+            type == CV_16UC1 ? (ippiTranspose)ippiTranspose_16u_C1R :
+            type == CV_16UC3 ? (ippiTranspose)ippiTranspose_16u_C3R :
+            type == CV_16UC4 ? (ippiTranspose)ippiTranspose_16u_C4R :
+            type == CV_16SC1 ? (ippiTranspose)ippiTranspose_16s_C1R :
+            type == CV_16SC3 ? (ippiTranspose)ippiTranspose_16s_C3R :
+            type == CV_16SC4 ? (ippiTranspose)ippiTranspose_16s_C4R :
+            type == CV_32SC1 ? (ippiTranspose)ippiTranspose_32s_C1R :
+            type == CV_32SC3 ? (ippiTranspose)ippiTranspose_32s_C3R :
+            type == CV_32SC4 ? (ippiTranspose)ippiTranspose_32s_C4R :
+            type == CV_32FC1 ? (ippiTranspose)ippiTranspose_32f_C1R :
+            type == CV_32FC3 ? (ippiTranspose)ippiTranspose_32f_C3R :
+            type == CV_32FC4 ? (ippiTranspose)ippiTranspose_32f_C4R : 0;
+    }
+
+    IppiSize roiSize = { src.cols, src.rows };
+    if (ippFunc != 0)
+    {
+        if (ippFunc(src.ptr(), (int)src.step, dst.ptr(), (int)dst.step, roiSize) >= 0)
+            return true;
+    }
+    else if (ippFuncI != 0)
+    {
+        if (ippFuncI(dst.ptr(), (int)dst.step, roiSize) >= 0)
+            return true;
+    }
+    return false;
 }
+#endif
+
+}
+
 
 void cv::transpose( InputArray _src, OutputArray _dst )
 {
@@ -3085,76 +3181,7 @@ void cv::transpose( InputArray _src, OutputArray _dst )
         return;
     }
 
-#if defined HAVE_IPP
-    CV_IPP_CHECK()
-    {
-        typedef IppStatus (CV_STDCALL * ippiTranspose)(const void * pSrc, int srcStep, void * pDst, int dstStep, IppiSize roiSize);
-        typedef IppStatus (CV_STDCALL * ippiTransposeI)(const void * pSrcDst, int srcDstStep, IppiSize roiSize);
-        ippiTranspose ippFunc = 0;
-        ippiTransposeI ippFuncI = 0;
-
-        if (dst.data == src.data && dst.cols == dst.rows)
-        {
-            CV_SUPPRESS_DEPRECATED_START
-            ippFuncI =
-                type == CV_8UC1 ? (ippiTransposeI)ippiTranspose_8u_C1IR :
-                type == CV_8UC3 ? (ippiTransposeI)ippiTranspose_8u_C3IR :
-                type == CV_8UC4 ? (ippiTransposeI)ippiTranspose_8u_C4IR :
-                type == CV_16UC1 ? (ippiTransposeI)ippiTranspose_16u_C1IR :
-                type == CV_16UC3 ? (ippiTransposeI)ippiTranspose_16u_C3IR :
-                type == CV_16UC4 ? (ippiTransposeI)ippiTranspose_16u_C4IR :
-                type == CV_16SC1 ? (ippiTransposeI)ippiTranspose_16s_C1IR :
-                type == CV_16SC3 ? (ippiTransposeI)ippiTranspose_16s_C3IR :
-                type == CV_16SC4 ? (ippiTransposeI)ippiTranspose_16s_C4IR :
-                type == CV_32SC1 ? (ippiTransposeI)ippiTranspose_32s_C1IR :
-                type == CV_32SC3 ? (ippiTransposeI)ippiTranspose_32s_C3IR :
-                type == CV_32SC4 ? (ippiTransposeI)ippiTranspose_32s_C4IR :
-                type == CV_32FC1 ? (ippiTransposeI)ippiTranspose_32f_C1IR :
-                type == CV_32FC3 ? (ippiTransposeI)ippiTranspose_32f_C3IR :
-                type == CV_32FC4 ? (ippiTransposeI)ippiTranspose_32f_C4IR : 0;
-            CV_SUPPRESS_DEPRECATED_END
-        }
-        else
-        {
-            ippFunc =
-                type == CV_8UC1 ? (ippiTranspose)ippiTranspose_8u_C1R :
-                type == CV_8UC3 ? (ippiTranspose)ippiTranspose_8u_C3R :
-                type == CV_8UC4 ? (ippiTranspose)ippiTranspose_8u_C4R :
-                type == CV_16UC1 ? (ippiTranspose)ippiTranspose_16u_C1R :
-                type == CV_16UC3 ? (ippiTranspose)ippiTranspose_16u_C3R :
-                type == CV_16UC4 ? (ippiTranspose)ippiTranspose_16u_C4R :
-                type == CV_16SC1 ? (ippiTranspose)ippiTranspose_16s_C1R :
-                type == CV_16SC3 ? (ippiTranspose)ippiTranspose_16s_C3R :
-                type == CV_16SC4 ? (ippiTranspose)ippiTranspose_16s_C4R :
-                type == CV_32SC1 ? (ippiTranspose)ippiTranspose_32s_C1R :
-                type == CV_32SC3 ? (ippiTranspose)ippiTranspose_32s_C3R :
-                type == CV_32SC4 ? (ippiTranspose)ippiTranspose_32s_C4R :
-                type == CV_32FC1 ? (ippiTranspose)ippiTranspose_32f_C1R :
-                type == CV_32FC3 ? (ippiTranspose)ippiTranspose_32f_C3R :
-                type == CV_32FC4 ? (ippiTranspose)ippiTranspose_32f_C4R : 0;
-        }
-
-        IppiSize roiSize = { src.cols, src.rows };
-        if (ippFunc != 0)
-        {
-            if (ippFunc(src.ptr(), (int)src.step, dst.ptr(), (int)dst.step, roiSize) >= 0)
-            {
-                CV_IMPL_ADD(CV_IMPL_IPP);
-                return;
-            }
-            setIppErrorStatus();
-        }
-        else if (ippFuncI != 0)
-        {
-            if (ippFuncI(dst.ptr(), (int)dst.step, roiSize) >= 0)
-            {
-                CV_IMPL_ADD(CV_IMPL_IPP);
-                return;
-            }
-            setIppErrorStatus();
-        }
-    }
-#endif
+    CV_IPP_RUN(true, ipp_transpose(src, dst))
 
     if( dst.data == src.data )
     {
@@ -4230,7 +4257,45 @@ Mat Mat::reshape(int _cn, int _newndims, const int* _newsz) const
             return reshape(_cn, _newsz[0]);
     }
 
-    CV_Error(CV_StsNotImplemented, "");
+    if (isContinuous())
+    {
+        CV_Assert(_cn >= 0 && _newndims > 0 && _newndims <= CV_MAX_DIM && _newsz);
+
+        if (_cn == 0)
+            _cn = this->channels();
+        else
+            CV_Assert(_cn <= CV_CN_MAX);
+
+        size_t total_elem1_ref = this->total() * this->channels();
+        size_t total_elem1 = _cn;
+
+        AutoBuffer<int, 4> newsz_buf( (size_t)_newndims );
+
+        for (int i = 0; i < _newndims; i++)
+        {
+            CV_Assert(_newsz[i] >= 0);
+
+            if (_newsz[i] > 0)
+                newsz_buf[i] = _newsz[i];
+            else if (i < dims)
+                newsz_buf[i] = this->size[i];
+            else
+                CV_Error(CV_StsOutOfRange, "Copy dimension (which has zero size) is not present in source matrix");
+
+            total_elem1 *= (size_t)newsz_buf[i];
+        }
+
+        if (total_elem1 != total_elem1_ref)
+            CV_Error(CV_StsUnmatchedSizes, "Requested and source matrices have different count of elements");
+
+        Mat hdr = *this;
+        hdr.flags = (hdr.flags & ~CV_MAT_CN_MASK) | ((_cn-1) << CV_CN_SHIFT);
+        setSize(hdr, _newndims, (int*)newsz_buf, NULL, true);
+
+        return hdr;
+    }
+
+    CV_Error(CV_StsNotImplemented, "Reshaping of n-dimensional non-continuous matrices is not supported yet");
     // TBD
     return Mat();
 }
@@ -4683,8 +4748,8 @@ SparseMat::Hdr::Hdr( int _dims, const int* _sizes, int _type )
     refcount = 1;
 
     dims = _dims;
-    valueOffset = (int)alignSize(sizeof(SparseMat::Node) +
-        sizeof(int)*std::max(dims - CV_MAX_DIM, 0), CV_ELEM_SIZE1(_type));
+    valueOffset = (int)alignSize(sizeof(SparseMat::Node) - MAX_DIM*sizeof(int) +
+                                 dims*sizeof(int), CV_ELEM_SIZE1(_type));
     nodeSize = alignSize(valueOffset +
         CV_ELEM_SIZE(_type), (int)sizeof(size_t));
 
@@ -4785,7 +4850,8 @@ void SparseMat::copyTo( SparseMat& m ) const
 void SparseMat::copyTo( Mat& m ) const
 {
     CV_Assert( hdr );
-    m.create( dims(), hdr->size, type() );
+    int ndims = dims();
+    m.create( ndims, hdr->size, type() );
     m = Scalar(0);
 
     SparseMatConstIterator from = begin();
@@ -4794,7 +4860,7 @@ void SparseMat::copyTo( Mat& m ) const
     for( i = 0; i < N; i++, ++from )
     {
         const Node* n = from.node();
-        copyElem( from.ptr, m.ptr(n->idx), esz);
+        copyElem( from.ptr, (ndims > 1 ? m.ptr(n->idx) : m.ptr(n->idx[0])), esz);
     }
 }
 
@@ -5083,7 +5149,8 @@ uchar* SparseMat::newNode(const int* idx, size_t hashval)
     if( !hdr->freeList )
     {
         size_t i, nsz = hdr->nodeSize, psize = hdr->pool.size(),
-            newpsize = std::max(psize*2, 8*nsz);
+            newpsize = std::max(psize*3/2, 8*nsz);
+        newpsize = (newpsize/nsz)*nsz;
         hdr->pool.resize(newpsize);
         uchar* pool = &hdr->pool[0];
         hdr->freeList = std::max(psize, nsz);

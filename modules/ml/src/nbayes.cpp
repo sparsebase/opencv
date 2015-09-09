@@ -313,7 +313,7 @@ public:
             CV_Error( CV_StsBadArg,
                      "The input samples must be 32f matrix with the number of columns = nallvars" );
 
-        if( samples.rows > 1 && _results.needed() )
+        if( (samples.rows > 1) && (! _results.needed()) )
             CV_Error( CV_StsNullPtr,
                      "When the number of input samples is >1, the output vector of results must be passed" );
 
@@ -443,7 +443,7 @@ public:
     bool isTrained() const { return !avg.empty(); }
     bool isClassifier() const { return true; }
     int getVarCount() const { return nallvars; }
-    String getDefaultModelName() const { return "opencv_ml_nbayes"; }
+    String getDefaultName() const { return "opencv_ml_nbayes"; }
 
     int nallvars;
     Mat var_idx, cls_labels, c;

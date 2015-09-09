@@ -99,7 +99,7 @@ v = f_y*y' + c_y
 Real lenses usually have some distortion, mostly radial distortion and slight tangential distortion.
 So, the above model is extended as:
 
-\f[\begin{array}{l} \vecthree{x}{y}{z} = R  \vecthree{X}{Y}{Z} + t \\ x' = x/z \\ y' = y/z \\ x'' = x'  \frac{1 + k_1 r^2 + k_2 r^4 + k_3 r^6}{1 + k_4 r^2 + k_5 r^4 + k_6 r^6} + 2 p_1 x' y' + p_2(r^2 + 2 x'^2) + s_1 r^2 + s_2 r^4 \\ y'' = y'  \frac{1 + k_1 r^2 + k_2 r^4 + k_3 r^6}{1 + k_4 r^2 + k_5 r^4 + k_6 r^6} + p_1 (r^2 + 2 y'^2) + 2 p_2 x' y' + s_1 r^2 + s_2 r^4 \\ \text{where} \quad r^2 = x'^2 + y'^2  \\ u = f_x*x'' + c_x \\ v = f_y*y'' + c_y \end{array}\f]
+\f[\begin{array}{l} \vecthree{x}{y}{z} = R  \vecthree{X}{Y}{Z} + t \\ x' = x/z \\ y' = y/z \\ x'' = x'  \frac{1 + k_1 r^2 + k_2 r^4 + k_3 r^6}{1 + k_4 r^2 + k_5 r^4 + k_6 r^6} + 2 p_1 x' y' + p_2(r^2 + 2 x'^2) + s_1 r^2 + s_2 r^4 \\ y'' = y'  \frac{1 + k_1 r^2 + k_2 r^4 + k_3 r^6}{1 + k_4 r^2 + k_5 r^4 + k_6 r^6} + p_1 (r^2 + 2 y'^2) + 2 p_2 x' y' + s_3 r^2 + s_4 r^4 \\ \text{where} \quad r^2 = x'^2 + y'^2  \\ u = f_x*x'' + c_x \\ v = f_y*y'' + c_y \end{array}\f]
 
 \f$k_1\f$, \f$k_2\f$, \f$k_3\f$, \f$k_4\f$, \f$k_5\f$, and \f$k_6\f$ are radial distortion coefficients. \f$p_1\f$ and \f$p_2\f$ are
 tangential distortion coefficients. \f$s_1\f$, \f$s_2\f$, \f$s_3\f$, and \f$s_4\f$, are the thin prism distortion
@@ -166,7 +166,7 @@ pattern (every view is described by several 3D-2D point correspondences).
 
     \f[x' = (\theta_d / r) x \\ y' = (\theta_d / r) y \f]
 
-    Finally, convertion into pixel coordinates: The final pixel coordinates vector [u; v] where:
+    Finally, conversion into pixel coordinates: The final pixel coordinates vector [u; v] where:
 
     \f[u = f_x (x' + \alpha y') + c_x \\
     v = f_y yy + c_y\f]
@@ -444,7 +444,7 @@ vector\<Point3f\> ), where N is the number of points in the view.
 @param cameraMatrix Camera matrix \f$A = \vecthreethree{f_x}{0}{c_x}{0}{f_y}{c_y}{0}{0}{_1}\f$ .
 @param distCoeffs Input vector of distortion coefficients
 \f$(k_1, k_2, p_1, p_2[, k_3[, k_4, k_5, k_6],[s_1, s_2, s_3, s_4]])\f$ of 4, 5, 8 or 12 elements. If
-the vector is NULL/empty, the zero distortion coefficients are assumed.
+the vector is empty, the zero distortion coefficients are assumed.
 @param imagePoints Output array of image points, 2xN/Nx2 1-channel or 1xN/Nx1 2-channel, or
 vector\<Point2f\> .
 @param jacobian Optional output 2Nx(10+\<numDistCoeffs\>) jacobian matrix of derivatives of image
@@ -697,19 +697,19 @@ CV_EXPORTS_W bool findCirclesGrid( InputArray image, Size patternSize,
 
 /** @brief Finds the camera intrinsic and extrinsic parameters from several views of a calibration pattern.
 
-@param objectPoints In the new interface it is a vector of vectors of calibration pattern points
-in the calibration pattern coordinate space. The outer vector contains as many elements as the
-number of the pattern views. If the same calibration pattern is shown in each view and it is fully
-visible, all the vectors will be the same. Although, it is possible to use partially occluded
-patterns, or even different patterns in different views. Then, the vectors will be different. The
-points are 3D, but since they are in a pattern coordinate system, then, if the rig is planar, it
-may make sense to put the model to a XY coordinate plane so that Z-coordinate of each input object
-point is 0.
+@param objectPoints In the new interface it is a vector of vectors of calibration pattern points in
+the calibration pattern coordinate space (e.g. std::vector<std::vector<cv::Vec3f>>). The outer
+vector contains as many elements as the number of the pattern views. If the same calibration pattern
+is shown in each view and it is fully visible, all the vectors will be the same. Although, it is
+possible to use partially occluded patterns, or even different patterns in different views. Then,
+the vectors will be different. The points are 3D, but since they are in a pattern coordinate system,
+then, if the rig is planar, it may make sense to put the model to a XY coordinate plane so that
+Z-coordinate of each input object point is 0.
 In the old interface all the vectors of object points from different views are concatenated
 together.
-@param imagePoints In the new interface it is a vector of vectors of the projections of
-calibration pattern points. imagePoints.size() and objectPoints.size() and imagePoints[i].size()
-must be equal to objectPoints[i].size() for each i.
+@param imagePoints In the new interface it is a vector of vectors of the projections of calibration
+pattern points (e.g. std::vector<std::vector<cv::Vec2f>>). imagePoints.size() and
+objectPoints.size() and imagePoints[i].size() must be equal to objectPoints[i].size() for each i.
 In the old interface all the vectors of object points from different views are concatenated
 together.
 @param imageSize Size of the image used only to initialize the intrinsic camera matrix.
@@ -719,11 +719,11 @@ and/or CV_CALIB_FIX_ASPECT_RATIO are specified, some or all of fx, fy, cx, cy mu
 initialized before calling the function.
 @param distCoeffs Output vector of distortion coefficients
 \f$(k_1, k_2, p_1, p_2[, k_3[, k_4, k_5, k_6],[s_1, s_2, s_3, s_4]])\f$ of 4, 5, 8 or 12 elements.
-@param rvecs Output vector of rotation vectors (see Rodrigues ) estimated for each pattern view.
-That is, each k-th rotation vector together with the corresponding k-th translation vector (see
-the next output parameter description) brings the calibration pattern from the model coordinate
-space (in which object points are specified) to the world coordinate space, that is, a real
-position of the calibration pattern in the k-th pattern view (k=0.. *M* -1).
+@param rvecs Output vector of rotation vectors (see Rodrigues ) estimated for each pattern view
+(e.g. std::vector<cv::Mat>>). That is, each k-th rotation vector together with the corresponding
+k-th translation vector (see the next output parameter description) brings the calibration pattern
+from the model coordinate space (in which object points are specified) to the world coordinate
+space, that is, a real position of the calibration pattern in the k-th pattern view (k=0.. *M* -1).
 @param tvecs Output vector of translation vectors estimated for each pattern view.
 @param flags Different flags that may be zero or a combination of the following values:
 -   **CV_CALIB_USE_INTRINSIC_GUESS** cameraMatrix contains valid initial values of
@@ -1187,7 +1187,7 @@ are feature points from cameras with same focal length and principle point.
 @param pp principle point of the camera.
 @param method Method for computing a fundamental matrix.
 -   **RANSAC** for the RANSAC algorithm.
--   **MEDS** for the LMedS algorithm.
+-   **LMEDS** for the LMedS algorithm.
 @param threshold Parameter used for RANSAC. It is the maximum distance from a point to an epipolar
 line in pixels, beyond which the point is considered an outlier and is not used for computing the
 final fundamental matrix. It can be set to something like 1-3, depending on the accuracy of the
@@ -1200,7 +1200,7 @@ for the other points. The array is computed only in the RANSAC and LMedS methods
 This function estimates essential matrix based on the five-point algorithm solver in @cite Nister03 .
 @cite SteweniusCFS is also a related. The epipolar geometry is described by the following equation:
 
-\f[[p_2; 1]^T K^T E K [p_1; 1] = 0 \\\f]\f[K =
+\f[[p_2; 1]^T K^{-T} E K^{-1} [p_1; 1] = 0 \\\f]\f[K =
 \begin{bmatrix}
 f & 0 & x_{pp}  \\
 0 & f & y_{pp}  \\
@@ -1555,7 +1555,8 @@ public:
     enum
     {
         MODE_SGBM = 0,
-        MODE_HH   = 1
+        MODE_HH   = 1,
+        MODE_SGBM_3WAY = 2
     };
 
     CV_WRAP virtual int getPreFilterCap() const = 0;

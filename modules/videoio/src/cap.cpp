@@ -43,6 +43,13 @@
 #include "cap_intelperc.hpp"
 #include "cap_dshow.hpp"
 
+// All WinRT versions older than 8.0 should provide classes used for video support
+#if defined(WINRT) && !defined(WINRT_8_0)
+#   include "cap_winrt_capture.hpp"
+#   include "cap_winrt_bridge.hpp"
+#   define WINRT_VIDEO
+#endif
+
 #if defined _M_X64 && defined _MSC_VER && !defined CV_ICC
 #pragma optimize("",off)
 #pragma warning(disable: 4748)
@@ -119,299 +126,222 @@ CV_IMPL int cvGetCaptureDomain( CvCapture* capture)
  */
 CV_IMPL CvCapture * cvCreateCameraCapture (int index)
 {
-    int  domains[] =
-    {
-#ifdef HAVE_MSMF
-        CV_CAP_MSMF,
-#endif
-#if 1
-        CV_CAP_IEEE1394,   // identical to CV_CAP_DC1394
-#endif
-#ifdef HAVE_TYZX
-        CV_CAP_STEREO,
-#endif
-#ifdef HAVE_PVAPI
-        CV_CAP_PVAPI,
-#endif
-#if 1
-        CV_CAP_VFW,        // identical to CV_CAP_V4L
-#endif
-#ifdef HAVE_MIL
-        CV_CAP_MIL,
-#endif
-#if defined(HAVE_QUICKTIME) || defined(HAVE_QTKIT)
-        CV_CAP_QT,
-#endif
-#ifdef HAVE_UNICAP
-        CV_CAP_UNICAP,
-#endif
-#ifdef HAVE_OPENNI
-        CV_CAP_OPENNI,
-#endif
-#ifdef HAVE_OPENNI2
-        CV_CAP_OPENNI2,
-#endif
-#ifdef HAVE_ANDROID_NATIVE_CAMERA
-        CV_CAP_ANDROID,
-#endif
-#ifdef HAVE_XIMEA
-        CV_CAP_XIAPI,
-#endif
-#ifdef HAVE_AVFOUNDATION
-        CV_CAP_AVFOUNDATION,
-#endif
-#ifdef HAVE_GIGE_API
-        CV_CAP_GIGANETIX,
-#endif
-#ifdef HAVE_INTELPERC
-        CV_CAP_INTELPERC,
-#endif
-        -1
-    };
-
     // interpret preferred interface (0 = autodetect)
     int pref = (index / 100) * 100;
-    if (pref)
-    {
-        domains[0]=pref;
-        index %= 100;
-        domains[1]=-1;
-    }
 
-    // try every possibly installed camera API
-    for (int i = 0; domains[i] >= 0; i++)
-    {
-#if defined(HAVE_MSMF)         || \
-    defined(HAVE_TYZX)         || \
-    defined(HAVE_VFW)          || \
-    defined(HAVE_LIBV4L)       || \
-    defined(HAVE_CAMV4L)       || \
-    defined(HAVE_CAMV4L2)      || \
-    defined(HAVE_VIDEOIO)      || \
-    defined(HAVE_GSTREAMER)    || \
-    defined(HAVE_DC1394_2)     || \
-    defined(HAVE_DC1394)       || \
-    defined(HAVE_CMU1394)      || \
-    defined(HAVE_MIL)          || \
-    defined(HAVE_QUICKTIME)    || \
-    defined(HAVE_QTKIT)        || \
-    defined(HAVE_UNICAP)       || \
-    defined(HAVE_PVAPI)        || \
-    defined(HAVE_OPENNI)       || \
-    defined(HAVE_OPENNI2)      || \
-    defined(HAVE_XIMEA)        || \
-    defined(HAVE_AVFOUNDATION) || \
-    defined(HAVE_ANDROID_NATIVE_CAMERA) || \
-    defined(HAVE_GIGE_API) || \
-    defined(HAVE_INTELPERC)    || \
-    (0)
-        // local variable to memorize the captured device
-        CvCapture *capture;
-#endif
+    // remove pref from index
+    index -= pref;
 
-        switch (domains[i])
-        {
+    // local variable to memorize the captured device
+    CvCapture *capture = 0;
+
+    switch (pref)
+    {
+    default:
+        // user specified an API we do not know
+        // bail out to let the user know that it is not available
+        if (pref) break;
+
 #ifdef HAVE_MSMF
-        case CV_CAP_MSMF:
-             capture = cvCreateCameraCapture_MSMF (index);
-             if (capture)
-                 return capture;
-            break;
+    case CV_CAP_MSMF:
+        if (!capture)
+            capture = cvCreateCameraCapture_MSMF(index);
+        if (pref) break;
 #endif
 #ifdef HAVE_TYZX
-        case CV_CAP_STEREO:
-            capture = cvCreateCameraCapture_TYZX (index);
-            if (capture)
-                return capture;
-            break;
+    case CV_CAP_STEREO:
+        if (!capture)
+            capture = cvCreateCameraCapture_TYZX(index);
+        if (pref) break;
 #endif
-        case CV_CAP_VFW:
+    case CV_CAP_VFW:
 #ifdef HAVE_VFW
-            capture = cvCreateCameraCapture_VFW (index);
-            if (capture)
-                return capture;
+        if (!capture)
+            capture = cvCreateCameraCapture_VFW(index);
 #endif
 #if defined HAVE_LIBV4L || defined HAVE_CAMV4L || defined HAVE_CAMV4L2 || defined HAVE_VIDEOIO
-            capture = cvCreateCameraCapture_V4L (index);
-            if (capture)
-                return capture;
+        if (!capture)
+            capture = cvCreateCameraCapture_V4L(index);
 #endif
 
 #ifdef HAVE_GSTREAMER
+        if (!capture)
             capture = cvCreateCapture_GStreamer(CV_CAP_GSTREAMER_V4L2, 0);
-            if (capture)
-                return capture;
-            capture = cvCreateCapture_GStreamer(CV_CAP_GSTREAMER_V4L, 0);
-            if (capture)
-                return capture;
-#endif
-            break; //CV_CAP_VFW
 
-        case CV_CAP_FIREWIRE:
+        if (!capture)
+            capture = cvCreateCapture_GStreamer(CV_CAP_GSTREAMER_V4L, 0);
+#endif
+        if (pref) break; // CV_CAP_VFW
+
+    case CV_CAP_FIREWIRE:
 #ifdef HAVE_DC1394_2
-            capture = cvCreateCameraCapture_DC1394_2 (index);
-            if (capture)
-                return capture;
+        if (!capture)
+            capture = cvCreateCameraCapture_DC1394_2(index);
 #endif
 
 #ifdef HAVE_DC1394
-            capture = cvCreateCameraCapture_DC1394 (index);
-            if (capture)
-                return capture;
+        if (!capture)
+            capture = cvCreateCameraCapture_DC1394(index);
 #endif
 
 #ifdef HAVE_CMU1394
-            capture = cvCreateCameraCapture_CMU (index);
-            if (capture)
-                return capture;
+        if (!capture)
+            capture = cvCreateCameraCapture_CMU(index);
 #endif
 
 #if defined(HAVE_GSTREAMER) && 0
-            //Re-enable again when gstreamer 1394 support will land in the backend code
+        // Re-enable again when gstreamer 1394 support will land in the backend code
+        if (!capture)
             capture = cvCreateCapture_GStreamer(CV_CAP_GSTREAMER_1394, 0);
-            if (capture)
-                return capture;
 #endif
-            break; //CV_CAP_FIREWIRE
+        if (pref) break; // CV_CAP_FIREWIRE
 
 #ifdef HAVE_MIL
-        case CV_CAP_MIL:
-            capture = cvCreateCameraCapture_MIL (index);
-            if (capture)
-                return capture;
-            break;
+    case CV_CAP_MIL:
+        if (!capture)
+            capture = cvCreateCameraCapture_MIL(index);
+        if (pref) break;
 #endif
 
 #if defined(HAVE_QUICKTIME) || defined(HAVE_QTKIT)
-        case CV_CAP_QT:
-            capture = cvCreateCameraCapture_QT (index);
-            if (capture)
-                return capture;
-            break;
+    case CV_CAP_QT:
+        if (!capture)
+            capture = cvCreateCameraCapture_QT(index);
+        if (pref) break;
 #endif
 
 #ifdef HAVE_UNICAP
-        case CV_CAP_UNICAP:
-            capture = cvCreateCameraCapture_Unicap (index);
-            if (capture)
-                return capture;
-        break;
+    case CV_CAP_UNICAP:
+        if (!capture)
+            capture = cvCreateCameraCapture_Unicap(index);
+        if (pref) break;
 #endif
 
 #ifdef HAVE_PVAPI
-        case CV_CAP_PVAPI:
-            capture = cvCreateCameraCapture_PvAPI (index);
-            if (capture)
-                return capture;
-        break;
+    case CV_CAP_PVAPI:
+        if (!capture)
+            capture = cvCreateCameraCapture_PvAPI(index);
+        if (pref) break;
 #endif
 
 #ifdef HAVE_OPENNI
-        case CV_CAP_OPENNI:
-            capture = cvCreateCameraCapture_OpenNI (index);
-            if (capture)
-                return capture;
-        break;
+    case CV_CAP_OPENNI:
+        if (!capture)
+            capture = cvCreateCameraCapture_OpenNI(index);
+        if (pref) break;
 #endif
 
 #ifdef HAVE_OPENNI2
-        case CV_CAP_OPENNI2:
-            capture = cvCreateCameraCapture_OpenNI(index);
-            if (capture)
-                return capture;
-            break;
-#endif
-
-#ifdef HAVE_ANDROID_NATIVE_CAMERA
-        case CV_CAP_ANDROID:
-            capture = cvCreateCameraCapture_Android (index);
-            if (capture)
-                return capture;
-        break;
+    case CV_CAP_OPENNI2:
+        if (!capture)
+            capture = cvCreateCameraCapture_OpenNI2(index);
+        if (pref) break;
 #endif
 
 #ifdef HAVE_XIMEA
-        case CV_CAP_XIAPI:
-            capture = cvCreateCameraCapture_XIMEA (index);
-            if (capture)
-                return capture;
-        break;
+    case CV_CAP_XIAPI:
+        if (!capture)
+            capture = cvCreateCameraCapture_XIMEA(index);
+        if (pref) break;
 #endif
 
 #ifdef HAVE_AVFOUNDATION
-        case CV_CAP_AVFOUNDATION:
-            capture = cvCreateCameraCapture_AVFoundation (index);
-            if (capture)
-                return capture;
-        break;
+    case CV_CAP_AVFOUNDATION:
+        if (!capture)
+            capture = cvCreateCameraCapture_AVFoundation(index);
+        if (pref) break;
 #endif
 
 #ifdef HAVE_GIGE_API
-        case CV_CAP_GIGANETIX:
-            capture = cvCreateCameraCapture_Giganetix (index);
-            if (capture)
-                return capture;
-        break; // CV_CAP_GIGANETIX
+    case CV_CAP_GIGANETIX:
+        if (!capture)
+            capture = cvCreateCameraCapture_Giganetix(index);
+        if (pref) break; // CV_CAP_GIGANETIX
 #endif
-        }
     }
 
-    // failed open a camera
-    return 0;
+    return capture;
 }
 
 /**
  * Videoreader dispatching method: it tries to find the first
  * API that can access a given filename.
  */
-CV_IMPL CvCapture * cvCreateFileCapture (const char * filename)
+CV_IMPL CvCapture * cvCreateFileCaptureWithPreference (const char * filename, int apiPreference)
 {
     CvCapture * result = 0;
 
+    switch(apiPreference) {
+    default:
+        // user specified an API we do not know
+        // bail out to let the user know that it is not available
+        if (apiPreference) break;
+
 #ifdef HAVE_FFMPEG
-    if (! result)
-        result = cvCreateFileCapture_FFMPEG_proxy (filename);
+    case CV_CAP_FFMPEG:
+        if (! result)
+            result = cvCreateFileCapture_FFMPEG_proxy (filename);
+        if (apiPreference) break;
 #endif
 
 #ifdef HAVE_VFW
-    if (! result)
-        result = cvCreateFileCapture_VFW (filename);
+    case CV_CAP_VFW:
+        if (! result)
+            result = cvCreateFileCapture_VFW (filename);
+        if (apiPreference) break;
 #endif
 
+    case CV_CAP_MSMF:
 #ifdef HAVE_MSMF
-    if (! result)
-        result = cvCreateFileCapture_MSMF (filename);
+        if (! result)
+            result = cvCreateFileCapture_MSMF (filename);
 #endif
 
 #ifdef HAVE_XINE
-    if (! result)
-        result = cvCreateFileCapture_XINE (filename);
+        if (! result)
+            result = cvCreateFileCapture_XINE (filename);
 #endif
+        if (apiPreference) break;
 
 #ifdef HAVE_GSTREAMER
-    if (! result)
-        result = cvCreateCapture_GStreamer (CV_CAP_GSTREAMER_FILE, filename);
+    case CV_CAP_GSTREAMER:
+        if (! result)
+            result = cvCreateCapture_GStreamer (CV_CAP_GSTREAMER_FILE, filename);
+        if (apiPreference) break;
 #endif
 
 #if defined(HAVE_QUICKTIME) || defined(HAVE_QTKIT)
-    if (! result)
-        result = cvCreateFileCapture_QT (filename);
+    case CV_CAP_QT:
+        if (! result)
+            result = cvCreateFileCapture_QT (filename);
+        if (apiPreference) break;
 #endif
 
 #ifdef HAVE_AVFOUNDATION
-    if (! result)
-        result = cvCreateFileCapture_AVFoundation (filename);
+    case CV_CAP_AVFOUNDATION:
+        if (! result)
+            result = cvCreateFileCapture_AVFoundation (filename);
+        if (apiPreference) break;
 #endif
 
 #ifdef HAVE_OPENNI
-    if (! result)
-        result = cvCreateFileCapture_OpenNI (filename);
+    case CV_CAP_OPENNI:
+        if (! result)
+            result = cvCreateFileCapture_OpenNI (filename);
+        if (apiPreference) break;
 #endif
 
-    if (! result)
-        result = cvCreateFileCapture_Images (filename);
+    case CV_CAP_IMAGES:
+        if (! result)
+            result = cvCreateFileCapture_Images (filename);
+    }
 
     return result;
+}
+
+CV_IMPL CvCapture * cvCreateFileCapture (const char * filename)
+{
+    return cvCreateFileCaptureWithPreference(filename, CV_CAP_ANY);
 }
 
 /**
@@ -499,17 +429,140 @@ CV_IMPL void cvReleaseVideoWriter( CvVideoWriter** pwriter )
 namespace cv
 {
 
+static Ptr<IVideoCapture> IVideoCapture_create(int index)
+{
+    int  domains[] =
+    {
+#ifdef HAVE_DSHOW
+        CV_CAP_DSHOW,
+#endif
+#ifdef HAVE_INTELPERC
+        CV_CAP_INTELPERC,
+#endif
+#ifdef WINRT_VIDEO
+        CAP_WINRT,
+#endif
+#ifdef HAVE_GPHOTO2
+        CV_CAP_GPHOTO2,
+#endif
+        -1, -1
+    };
+
+    // interpret preferred interface (0 = autodetect)
+    int pref = (index / 100) * 100;
+    if (pref)
+    {
+        domains[0]=pref;
+        index %= 100;
+        domains[1]=-1;
+    }
+
+    // try every possibly installed camera API
+    for (int i = 0; domains[i] >= 0; i++)
+    {
+#if defined(HAVE_DSHOW)        || \
+    defined(HAVE_INTELPERC)    || \
+    defined(WINRT_VIDEO)       || \
+    defined(HAVE_GPHOTO2)      || \
+    (0)
+        Ptr<IVideoCapture> capture;
+
+        switch (domains[i])
+        {
+#ifdef HAVE_DSHOW
+            case CV_CAP_DSHOW:
+                capture = makePtr<VideoCapture_DShow>(index);
+                break; // CV_CAP_DSHOW
+#endif
+#ifdef HAVE_INTELPERC
+            case CV_CAP_INTELPERC:
+                capture = makePtr<VideoCapture_IntelPerC>();
+                break; // CV_CAP_INTEL_PERC
+#endif
+#ifdef WINRT_VIDEO
+        case CAP_WINRT:
+            capture = Ptr<IVideoCapture>(new cv::VideoCapture_WinRT(index));
+            if (capture)
+                return capture;
+            break; // CAP_WINRT
+#endif
+#ifdef HAVE_GPHOTO2
+            case CV_CAP_GPHOTO2:
+                capture = createGPhoto2Capture(index);
+                break;
+#endif
+        }
+        if (capture && capture->isOpened())
+            return capture;
+#endif
+    }
+
+    // failed open a camera
+    return Ptr<IVideoCapture>();
+}
+
+
+static Ptr<IVideoCapture> IVideoCapture_create(const String& filename)
+{
+    int  domains[] =
+    {
+        CV_CAP_ANY,
+#ifdef HAVE_GPHOTO2
+        CV_CAP_GPHOTO2,
+#endif
+        -1, -1
+    };
+
+    // try every possibly installed camera API
+    for (int i = 0; domains[i] >= 0; i++)
+    {
+        Ptr<IVideoCapture> capture;
+
+        switch (domains[i])
+        {
+        case CV_CAP_ANY:
+            capture = createMotionJpegCapture(filename);
+            break;
+#ifdef HAVE_GPHOTO2
+        case CV_CAP_GPHOTO2:
+            capture = createGPhoto2Capture(filename);
+            break;
+#endif
+        }
+
+        if (capture && capture->isOpened())
+        {
+            return capture;
+        }
+    }
+    // failed open a camera
+    return Ptr<IVideoCapture>();
+}
+
+static Ptr<IVideoWriter> IVideoWriter_create(const String& filename, int _fourcc, double fps, Size frameSize, bool isColor)
+{
+    Ptr<IVideoWriter> iwriter;
+    if( _fourcc == CV_FOURCC('M', 'J', 'P', 'G') )
+        iwriter = createMotionJpegWriter(filename, fps, frameSize, isColor);
+    return iwriter;
+}
+
 VideoCapture::VideoCapture()
 {}
 
-VideoCapture::VideoCapture(const String& filename)
+VideoCapture::VideoCapture(const String& filename, int apiPreference)
 {
-    open(filename);
+    open(filename, apiPreference);
 }
 
-VideoCapture::VideoCapture(int device)
+VideoCapture::VideoCapture(const String& filename)
 {
-    open(device);
+    open(filename, CAP_ANY);
+}
+
+VideoCapture::VideoCapture(int index)
+{
+    open(index);
 }
 
 VideoCapture::~VideoCapture()
@@ -518,20 +571,29 @@ VideoCapture::~VideoCapture()
     cap.release();
 }
 
-bool VideoCapture::open(const String& filename)
+bool VideoCapture::open(const String& filename, int apiPreference)
 {
     if (isOpened()) release();
-    cap.reset(cvCreateFileCapture(filename.c_str()));
+    icap = IVideoCapture_create(filename);
+    if (!icap.empty())
+        return true;
+
+    cap.reset(cvCreateFileCaptureWithPreference(filename.c_str(), apiPreference));
     return isOpened();
 }
 
-bool VideoCapture::open(int device)
+bool VideoCapture::open(const String& filename)
+{
+    return open(filename, CAP_ANY);
+}
+
+bool VideoCapture::open(int index)
 {
     if (isOpened()) release();
-    icap = createCameraCapture(device);
+    icap = IVideoCapture_create(index);
     if (!icap.empty())
         return true;
-    cap.reset(cvCreateCameraCapture(device));
+    cap.reset(cvCreateCameraCapture(index));
     return isOpened();
 }
 
@@ -585,7 +647,29 @@ bool VideoCapture::read(OutputArray image)
 
 VideoCapture& VideoCapture::operator >> (Mat& image)
 {
+#ifdef WINRT_VIDEO
+    if (grab())
+    {
+        if (retrieve(image))
+        {
+            std::lock_guard<std::mutex> lock(VideoioBridge::getInstance().inputBufferMutex);
+            VideoioBridge& bridge = VideoioBridge::getInstance();
+
+            // double buffering
+            bridge.swapInputBuffers();
+            auto p = bridge.frontInputPtr;
+
+            bridge.bIsFrameNew = false;
+
+            // needed here because setting Mat 'image' is not allowed by OutputArray in read()
+            Mat m(bridge.getHeight(), bridge.getWidth(), CV_8UC3, p);
+            image = m;
+        }
+    }
+#else
     read(image);
+#endif
+
     return *this;
 }
 
@@ -609,59 +693,6 @@ double VideoCapture::get(int propId) const
     return icvGetCaptureProperty(cap, propId);
 }
 
-Ptr<IVideoCapture> VideoCapture::createCameraCapture(int index)
-{
-    int  domains[] =
-    {
-#ifdef HAVE_DSHOW
-        CV_CAP_DSHOW,
-#endif
-#ifdef HAVE_INTELPERC
-        CV_CAP_INTELPERC,
-#endif
-        -1, -1
-    };
-
-    // interpret preferred interface (0 = autodetect)
-    int pref = (index / 100) * 100;
-    if (pref)
-    {
-        domains[0]=pref;
-        index %= 100;
-        domains[1]=-1;
-    }
-
-    // try every possibly installed camera API
-    for (int i = 0; domains[i] >= 0; i++)
-    {
-#if defined(HAVE_DSHOW)        || \
-    defined(HAVE_INTELPERC)    || \
-    (0)
-        Ptr<IVideoCapture> capture;
-
-        switch (domains[i])
-        {
-#ifdef HAVE_DSHOW
-        case CV_CAP_DSHOW:
-            capture = makePtr<VideoCapture_DShow>(index);
-            if (capture && capture.dynamicCast<VideoCapture_DShow>()->isOpened())
-                return capture;
-            break; // CV_CAP_DSHOW
-#endif
-#ifdef HAVE_INTELPERC
-        case CV_CAP_INTELPERC:
-            capture = makePtr<VideoCapture_IntelPerC>();
-            if (capture && capture.dynamicCast<VideoCapture_IntelPerC>()->isOpened())
-                return capture;
-            break; // CV_CAP_INTEL_PERC
-#endif
-        }
-#endif
-    }
-
-    // failed open a camera
-    return Ptr<IVideoCapture>();
-}
 
 VideoWriter::VideoWriter()
 {}
@@ -673,6 +704,7 @@ VideoWriter::VideoWriter(const String& filename, int _fourcc, double fps, Size f
 
 void VideoWriter::release()
 {
+    iwriter.release();
     writer.release();
 }
 
@@ -683,19 +715,43 @@ VideoWriter::~VideoWriter()
 
 bool VideoWriter::open(const String& filename, int _fourcc, double fps, Size frameSize, bool isColor)
 {
+    if (isOpened()) release();
+    iwriter = IVideoWriter_create(filename, _fourcc, fps, frameSize, isColor);
+    if (!iwriter.empty())
+        return true;
     writer.reset(cvCreateVideoWriter(filename.c_str(), _fourcc, fps, frameSize, isColor));
     return isOpened();
 }
 
 bool VideoWriter::isOpened() const
 {
-    return !writer.empty();
+    return !iwriter.empty() || !writer.empty();
+}
+
+
+bool VideoWriter::set(int propId, double value)
+{
+    if (!iwriter.empty())
+        return iwriter->setProperty(propId, value);
+    return false;
+}
+
+double VideoWriter::get(int propId) const
+{
+    if (!iwriter.empty())
+        return iwriter->getProperty(propId);
+    return 0.;
 }
 
 void VideoWriter::write(const Mat& image)
 {
-    IplImage _img = image;
-    cvWriteFrame(writer, &_img);
+    if( iwriter )
+        iwriter->write(image);
+    else
+    {
+        IplImage _img = image;
+        cvWriteFrame(writer, &_img);
+    }
 }
 
 VideoWriter& VideoWriter::operator << (const Mat& image)

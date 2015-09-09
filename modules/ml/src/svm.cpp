@@ -538,6 +538,8 @@ public:
                 {
                     kr.idx = cache_size;
                     cache_size++;
+                    if (!lru_last)
+                        lru_last = i1+1;
                 }
                 else
                 {
@@ -546,6 +548,8 @@ public:
                     last.idx = -1;
                     lru_cache[last.prev].next = 0;
                     lru_last = last.prev;
+                    last.prev = 0;
+                    last.next = 0;
                 }
                 kernel->calc( sample_count, var_count, samples.ptr<float>(),
                               samples.ptr<float>(i1), lru_cache_data.ptr<Qfloat>(kr.idx) );
@@ -561,6 +565,8 @@ public:
                 else
                     lru_first = kr.next;
             }
+            if (lru_first)
+                lru_cache[lru_first].prev = i1+1;
             kr.next = lru_first;
             kr.prev = 0;
             lru_first = i1+1;
@@ -1669,20 +1675,22 @@ public:
         Mat samples = data->getTrainSamples();
         Mat responses;
         bool is_classification = false;
-        Mat class_labels0 = class_labels;
+        Mat class_labels0;
         int class_count = (int)class_labels.total();
 
         if( svmType == C_SVC || svmType == NU_SVC )
         {
             responses = data->getTrainNormCatResponses();
             class_labels = data->getClassLabels();
+            class_count = (int)class_labels.total();
             is_classification = true;
 
             vector<int> temp_class_labels;
             setRangeVector(temp_class_labels, class_count);
 
             // temporarily replace class labels with 0, 1, ..., NCLASSES-1
-            Mat(temp_class_labels).copyTo(class_labels);
+            class_labels0 = class_labels;
+            class_labels = Mat(temp_class_labels).clone();
         }
         else
             responses = data->getTrainResponses();
@@ -1755,8 +1763,9 @@ public:
         Mat temp_train_responses(train_sample_count, 1, rtype);
         Mat temp_test_responses;
 
+        // If grid.minVal == grid.maxVal, this will allow one and only one pass through the loop with params.var = grid.minVal.
         #define FOR_IN_GRID(var, grid) \
-            for( params.var = grid.minVal; params.var == grid.minVal || params.var < grid.maxVal; params.var *= grid.logStep )
+            for( params.var = grid.minVal; params.var == grid.minVal || params.var < grid.maxVal; params.var = (grid.minVal == grid.maxVal) ? grid.maxVal + 1 : params.var * grid.logStep )
 
         FOR_IN_GRID(C, C_grid)
         FOR_IN_GRID(gamma, gamma_grid)
@@ -1786,7 +1795,7 @@ public:
                 if( !do_train( temp_train_samples, temp_train_responses ))
                     continue;
 
-                for( i = 0; i < test_sample_count; i++ )
+                for( i = 0; i < train_sample_count; i++ )
                 {
                     j = sidx[(i+start+train_sample_count) % sample_count];
                     memcpy(temp_train_samples.ptr(i), samples.ptr(j), sample_size);
@@ -2008,7 +2017,7 @@ public:
         return var_count;
     }
 
-    String getDefaultModelName() const
+    String getDefaultName() const
     {
         return "opencv_ml_svm";
     }
