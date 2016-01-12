@@ -241,6 +241,26 @@ static inline IppDataType ippiGetDataType(int depth)
         depth == CV_64F ? ipp64f : (IppDataType)-1;
 }
 
+// IPP temporary buffer hepler
+template<typename T>
+class IppAutoBuffer
+{
+public:
+    IppAutoBuffer() { m_pBuffer = NULL; }
+    IppAutoBuffer(int size) { Alloc(size); }
+    ~IppAutoBuffer() { Release(); }
+    T* Alloc(int size) { m_pBuffer = (T*)ippMalloc(size); return m_pBuffer; }
+    void Release() { if(m_pBuffer) ippFree(m_pBuffer); }
+    inline operator T* () { return (T*)m_pBuffer;}
+    inline operator const T* () const { return (const T*)m_pBuffer;}
+private:
+    // Disable copy operations
+    IppAutoBuffer(IppAutoBuffer &) {};
+    IppAutoBuffer& operator =(const IppAutoBuffer &) {return *this;};
+
+    T* m_pBuffer;
+};
+
 #else
 #define IPP_VERSION_X100 0
 #endif
@@ -256,6 +276,42 @@ static inline IppDataType ippiGetDataType(int depth)
 #define HAVE_ICV 0
 #endif
 
+#if defined HAVE_IPP
+#if IPP_VERSION_X100 >= 900
+#define IPP_INITIALIZER(FEAT)                           \
+{                                                       \
+    if(FEAT)                                            \
+        ippSetCpuFeatures(FEAT);                        \
+    else                                                \
+        ippInit();                                      \
+}
+#elif IPP_VERSION_X100 >= 800
+#define IPP_INITIALIZER(FEAT)                           \
+{                                                       \
+    ippInit();                                          \
+}
+#else
+#define IPP_INITIALIZER(FEAT)                           \
+{                                                       \
+    ippStaticInit();                                    \
+}
+#endif
+
+#ifdef CVAPI_EXPORTS
+#define IPP_INITIALIZER_AUTO                            \
+struct __IppInitializer__                               \
+{                                                       \
+    __IppInitializer__()                                \
+    {IPP_INITIALIZER(cv::ipp::getIppFeatures())}        \
+};                                                      \
+static struct __IppInitializer__ __ipp_initializer__;
+#else
+#define IPP_INITIALIZER_AUTO
+#endif
+#else
+#define IPP_INITIALIZER
+#define IPP_INITIALIZER_AUTO
+#endif
 
 #define CV_IPP_CHECK_COND (cv::ipp::useIPP())
 #define CV_IPP_CHECK() if(CV_IPP_CHECK_COND)
