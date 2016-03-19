@@ -877,14 +877,11 @@ CUDA_TEST_P(Reduce, Cols)
 {
     cv::Mat src = randomMat(size, type);
 
-    cv::cuda::GpuMat dst = createMat(cv::Size(src.rows, 1), dst_type, useRoi);
+    cv::cuda::GpuMat dst;
     cv::cuda::reduce(loadMat(src, useRoi), dst, 1, reduceOp, dst_depth);
 
     cv::Mat dst_gold;
     cv::reduce(src, dst_gold, 1, reduceOp, dst_depth);
-    dst_gold.cols = dst_gold.rows;
-    dst_gold.rows = 1;
-    dst_gold.step = dst_gold.cols * dst_gold.elemSize();
 
     EXPECT_MAT_NEAR(dst_gold, dst, dst_depth < CV_32F ? 0.0 : 0.02);
 }
@@ -951,11 +948,11 @@ CUDA_TEST_P(Normalize, WithMask)
 
     cv::cuda::GpuMat dst = createMat(size, type, useRoi);
     dst.setTo(cv::Scalar::all(0));
-    cv::cuda::normalize(loadMat(src, useRoi), dst, alpha, beta, norm_type, type, loadMat(mask, useRoi));
+    cv::cuda::normalize(loadMat(src, useRoi), dst, alpha, beta, norm_type, -1, loadMat(mask, useRoi));
 
     cv::Mat dst_gold(size, type);
     dst_gold.setTo(cv::Scalar::all(0));
-    cv::normalize(src, dst_gold, alpha, beta, norm_type, type, mask);
+    cv::normalize(src, dst_gold, alpha, beta, norm_type, -1, mask);
 
     EXPECT_MAT_NEAR(dst_gold, dst, type < CV_32F ? 1.0 : 1e-4);
 }

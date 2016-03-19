@@ -22,12 +22,16 @@ if((NOT ANDROID) AND HAVE_OPENGL)
   add_subdirectory(opengl)
 endif()
 
+if(UNIX AND NOT ANDROID AND (HAVE_VA OR HAVE_VA_INTEL))
+  add_subdirectory(va_intel)
+endif()
+
 if(ANDROID AND BUILD_ANDROID_EXAMPLES)
   add_subdirectory(android)
 endif()
 
 if(INSTALL_PYTHON_EXAMPLES)
-  add_subdirectory(python2)
+  add_subdirectory(python)
 endif()
 
 #

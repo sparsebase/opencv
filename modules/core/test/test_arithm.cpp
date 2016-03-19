@@ -1792,7 +1792,6 @@ INSTANTIATE_TEST_CASE_P(Arithm, SubtractOutputMatNotEmpty, testing::Combine(
     testing::Values(-1, CV_16S, CV_32S, CV_32F),
     testing::Bool()));
 
-
 TEST(Core_FindNonZero, singular)
 {
     Mat img(10, 10, CV_8U, Scalar::all(0));
@@ -1815,4 +1814,33 @@ TEST(Core_BoolVector, support)
     }
     ASSERT_EQ( nz, countNonZero(test) );
     ASSERT_FLOAT_EQ((float)nz/n, (float)(mean(test)[0]));
+}
+
+TEST(MinMaxLoc, Mat_IntMax_Without_Mask)
+{
+    Mat_<int> mat(50, 50);
+    int iMaxVal = numeric_limits<int>::max();
+    mat.setTo(iMaxVal);
+
+    double min, max;
+    Point minLoc, maxLoc;
+
+    minMaxLoc(mat, &min, &max, &minLoc, &maxLoc, Mat());
+
+    ASSERT_EQ(iMaxVal, min);
+    ASSERT_EQ(iMaxVal, max);
+
+    ASSERT_EQ(Point(0, 0), minLoc);
+    ASSERT_EQ(Point(0, 0), maxLoc);
+}
+
+TEST(Normalize, regression_5876_inplace_change_type)
+{
+    double initial_values[] = {1, 2, 5, 4, 3};
+    float result_values[] = {0, 0.25, 1, 0.75, 0.5};
+    Mat m(Size(5, 1), CV_64FC1, initial_values);
+    Mat result(Size(5, 1), CV_32FC1, result_values);
+
+    normalize(m, m, 1, 0, NORM_MINMAX, CV_32F);
+    EXPECT_EQ(0, cvtest::norm(m, result, NORM_INF));
 }

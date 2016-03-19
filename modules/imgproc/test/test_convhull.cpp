@@ -1426,7 +1426,7 @@ protected:
     void run_func(void);
     int validate_test_results( int test_case_idx );
     double max_noise;
-    float line[6], line0[6];
+    AutoBuffer<float> line, line0;
     int dist_type;
     double reps, aeps;
 };
@@ -1438,11 +1438,6 @@ CV_FitLineTest::CV_FitLineTest()
     max_log_size = 10;
     max_noise = 0.05;
 }
-
-#if defined(__GNUC__) && (__GNUC__ == 4) && (__GNUC_MINOR__ == 8)
-# pragma GCC diagnostic push
-# pragma GCC diagnostic ignored "-Warray-bounds"
-#endif
 
 void CV_FitLineTest::generate_point_set( void* pointsSet )
 {
@@ -1515,14 +1510,12 @@ void CV_FitLineTest::generate_point_set( void* pointsSet )
     }
 }
 
-#if defined(__GNUC__) && (__GNUC__ == 4) && (__GNUC_MINOR__ == 8)
-# pragma GCC diagnostic pop
-#endif
-
 int CV_FitLineTest::prepare_test_case( int test_case_idx )
 {
     RNG& rng = ts->get_rng();
     dims = cvtest::randInt(rng) % 2 + 2;
+    line.allocate(dims * 2);
+    line0.allocate(dims * 2);
     min_log_size = MAX(min_log_size,5);
     max_log_size = MAX(min_log_size,max_log_size);
     int code = CV_BaseShapeDescrTest::prepare_test_case( test_case_idx );
@@ -1542,11 +1535,6 @@ void CV_FitLineTest::run_func()
     else
         cv::fitLine(cv::cvarrToMat(points), (cv::Vec6f&)line[0], dist_type, 0, reps, aeps);
 }
-
-#if defined(__GNUC__) && (__GNUC__ == 4) && (__GNUC_MINOR__ == 8)
-# pragma GCC diagnostic push
-# pragma GCC diagnostic ignored "-Warray-bounds"
-#endif
 
 int CV_FitLineTest::validate_test_results( int test_case_idx )
 {
@@ -1625,10 +1613,6 @@ _exit_:
     }
     return code;
 }
-
-#if defined(__GNUC__) && (__GNUC__ == 4) && (__GNUC_MINOR__ == 8)
-# pragma GCC diagnostic pop
-#endif
 
 /****************************************************************************************\
 *                                   ContourMoments Test                                  *
@@ -1928,5 +1912,62 @@ TEST(Imgproc_FitLine, accuracy) { CV_FitLineTest test; test.safe_run(); }
 TEST(Imgproc_ContourMoments, accuracy) { CV_ContourMomentsTest test; test.safe_run(); }
 TEST(Imgproc_ContourPerimeterSlice, accuracy) { CV_PerimeterAreaSliceTest test; test.safe_run(); }
 TEST(Imgproc_FitEllipse, small) { CV_FitEllipseSmallTest test; test.safe_run(); }
+
+
+
+PARAM_TEST_CASE(ConvexityDefects_regression_5908, bool, int)
+{
+public:
+    int start_index;
+    bool clockwise;
+
+    Mat contour;
+
+    virtual void SetUp()
+    {
+        clockwise = GET_PARAM(0);
+        start_index = GET_PARAM(1);
+
+        const int N = 11;
+        const Point2i points[N] = {
+            Point2i(154, 408),
+            Point2i(45, 223),
+            Point2i(115, 275), // inner
+            Point2i(104, 166),
+            Point2i(154, 256), // inner
+            Point2i(169, 144),
+            Point2i(185, 256), // inner
+            Point2i(235, 170),
+            Point2i(240, 320), // inner
+            Point2i(330, 287),
+            Point2i(224, 390)
+        };
+
+        contour = Mat(N, 1, CV_32SC2);
+        for (int i = 0; i < N; i++)
+        {
+            contour.at<Point2i>(i) = (!clockwise) // image and convexHull coordinate systems are different
+                    ? points[(start_index + i) % N]
+                    : points[N - 1 - ((start_index + i) % N)];
+        }
+    }
+};
+
+TEST_P(ConvexityDefects_regression_5908, simple)
+{
+    std::vector<int> hull;
+    cv::convexHull(contour, hull, clockwise, false);
+
+    std::vector<Vec4i> result;
+    cv::convexityDefects(contour, hull, result);
+
+    EXPECT_EQ(4, (int)result.size());
+}
+
+INSTANTIATE_TEST_CASE_P(Imgproc, ConvexityDefects_regression_5908,
+        testing::Combine(
+                testing::Bool(),
+                testing::Values(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+        ));
 
 /* End of file. */

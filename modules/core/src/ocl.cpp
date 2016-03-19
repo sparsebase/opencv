@@ -684,10 +684,13 @@ typedef struct _cl_buffer_region {
 
 #define CL_CALLBACK CV_STDCALL
 
-static volatile bool g_haveOpenCL = false;
-static const char* oclFuncToCheck = "clEnqueueReadBufferRect";
 
-#if defined(__APPLE__)
+#ifdef HAVE_OPENCL
+static const char* oclFuncToCheck = "clEnqueueReadBufferRect";
+static volatile bool g_haveOpenCL = false;
+#endif
+
+#if defined(__APPLE__) && defined(HAVE_OPENCL)
 #include <dlfcn.h>
 
 static void* initOpenCLAndLoad(const char* funcname)
@@ -716,7 +719,7 @@ static void* initOpenCLAndLoad(const char* funcname)
     return funcname && handle ? dlsym(handle, funcname) : 0;
 }
 
-#elif defined WIN32 || defined _WIN32
+#elif (defined WIN32 || defined _WIN32) && defined(HAVE_OPENCL)
 
 #ifndef _WIN32_WINNT           // This is needed for the declaration of TryEnterCriticalSection in winbase.h with Visual Studio 2005 (and older?)
   #define _WIN32_WINNT 0x0400  // http://msdn.microsoft.com/en-us/library/ms686857(VS.85).aspx
@@ -751,7 +754,7 @@ static void* initOpenCLAndLoad(const char* funcname)
     return funcname ? (void*)GetProcAddress(handle, funcname) : 0;
 }
 
-#elif defined(__linux)
+#elif defined(__linux) && defined(HAVE_OPENCL)
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -3902,7 +3905,7 @@ protected:
             if (e.capacity_ >= size)
             {
                 size_t diff = e.capacity_ - size;
-                if (diff < size / 8 && (result_pos == reservedEntries_.end() || diff < minDiff))
+                if (diff < std::max((size_t)4096, size / 8) && (result_pos == reservedEntries_.end() || diff < minDiff))
                 {
                     minDiff = diff;
                     result_pos = i;
@@ -3941,12 +3944,8 @@ protected:
     inline size_t _allocationGranularity(size_t size)
     {
         // heuristic values
-        if (size < 1024)
-            return 16;
-        else if (size < 64*1024)
-            return 64;
-        else if (size < 1024*1024)
-            return 4096;
+        if (size < 1024*1024)
+            return 4096;  // don't work with buffers smaller than 4Kb (hidden allocation overhead issue)
         else if (size < 16*1024*1024)
             return 64*1024;
         else
@@ -4197,6 +4196,61 @@ private:
     AlignedDataPtr(const AlignedDataPtr&); // disabled
     AlignedDataPtr& operator=(const AlignedDataPtr&); // disabled
 };
+
+template <bool readAccess, bool writeAccess>
+class AlignedDataPtr2D
+{
+protected:
+    const size_t size_;
+    uchar* const originPtr_;
+    const size_t alignment_;
+    uchar* ptr_;
+    uchar* allocatedPtr_;
+    size_t rows_;
+    size_t cols_;
+    size_t step_;
+
+public:
+    AlignedDataPtr2D(uchar* ptr, size_t rows, size_t cols, size_t step, size_t alignment)
+        : size_(rows*step), originPtr_(ptr), alignment_(alignment), ptr_(ptr), allocatedPtr_(NULL), rows_(rows), cols_(cols), step_(step)
+    {
+        CV_DbgAssert((alignment & (alignment - 1)) == 0); // check for 2^n
+        if (((size_t)ptr_ & (alignment - 1)) != 0)
+        {
+            allocatedPtr_ = new uchar[size_ + alignment - 1];
+            ptr_ = (uchar*)(((uintptr_t)allocatedPtr_ + (alignment - 1)) & ~(alignment - 1));
+            if (readAccess)
+            {
+                for (size_t i = 0; i < rows_; i++)
+                    memcpy(ptr_ + i*step_, originPtr_ + i*step_, cols_);
+            }
+        }
+    }
+
+    uchar* getAlignedPtr() const
+    {
+        CV_DbgAssert(((size_t)ptr_ & (alignment_ - 1)) == 0);
+        return ptr_;
+    }
+
+    ~AlignedDataPtr2D()
+    {
+        if (allocatedPtr_)
+        {
+            if (writeAccess)
+            {
+                for (size_t i = 0; i < rows_; i++)
+                    memcpy(originPtr_ + i*step_, ptr_ + i*step_, cols_);
+            }
+            delete[] allocatedPtr_;
+            allocatedPtr_ = NULL;
+        }
+        ptr_ = NULL;
+    }
+private:
+    AlignedDataPtr2D(const AlignedDataPtr2D&); // disabled
+    AlignedDataPtr2D& operator=(const AlignedDataPtr2D&); // disabled
+};
 #if defined _MSC_VER
 #pragma warning(default:4127) // conditional expression is constant
 #endif
@@ -4237,7 +4291,7 @@ public:
         bufferPoolSVM.setMaxReservedSize(poolSize);
 #endif
 
-        matStdAllocator = Mat::getStdAllocator();
+        matStdAllocator = Mat::getDefaultAllocator();
     }
 
     UMatData* defaultAllocate(int dims, const int* sizes, int type, void* data, size_t* step,
@@ -4320,6 +4374,7 @@ public:
         u->flags = flags0;
         u->allocatorFlags_ = allocatorFlags;
         CV_DbgAssert(!u->tempUMat()); // for bufferPool.release() consistency in deallocate()
+        u->markHostCopyObsolete(true);
         return u;
     }
 
@@ -4397,8 +4452,11 @@ public:
 #endif
             {
                 tempUMatFlags = UMatData::TEMP_UMAT;
-                handle = clCreateBuffer(ctx_handle, CL_MEM_USE_HOST_PTR|createFlags,
-                                           u->size, u->origdata, &retval);
+                if (u->origdata == cv::alignPtr(u->origdata, 4)) // There are OpenCL runtime issues for less aligned data
+                {
+                    handle = clCreateBuffer(ctx_handle, CL_MEM_USE_HOST_PTR|createFlags,
+                                            u->size, u->origdata, &retval);
+                }
                 if((!handle || retval < 0) && !(accessFlags & ACCESS_FAST))
                 {
                     handle = clCreateBuffer(ctx_handle, CL_MEM_COPY_HOST_PTR|CL_MEM_READ_WRITE|createFlags,
@@ -4454,15 +4512,17 @@ public:
         if(!u)
             return;
 
-        CV_Assert(u->urefcount >= 0);
-        CV_Assert(u->refcount >= 0);
+        CV_Assert(u->urefcount == 0);
+        CV_Assert(u->refcount == 0 && "UMat deallocation error: some derived Mat is still alive");
 
-        CV_Assert(u->handle != 0 && u->urefcount == 0);
+        CV_Assert(u->handle != 0);
+        CV_Assert(u->mapcount == 0);
         if(u->tempUMat())
         {
+            CV_Assert(u->origdata);
 //            UMatDataAutoLock lock(u);
 
-            if( u->hostCopyObsolete() && u->refcount > 0 )
+            if (u->hostCopyObsolete())
             {
 #ifdef HAVE_OPENCL_SVM
                 if ((u->allocatorFlags_ & svm::OPENCL_SVM_BUFFER_MASK) != 0)
@@ -4514,17 +4574,29 @@ public:
                     }
                     else
                     {
-                        // TODO Is it really needed for clCreateBuffer with CL_MEM_USE_HOST_PTR?
                         cl_int retval = 0;
-                        void* data = clEnqueueMapBuffer(q, (cl_mem)u->handle, CL_TRUE,
-                                                        (CL_MAP_READ | CL_MAP_WRITE),
-                                                        0, u->size, 0, 0, 0, &retval);
-                        CV_OclDbgAssert(retval == CL_SUCCESS);
-                        CV_OclDbgAssert(clEnqueueUnmapMemObject(q, (cl_mem)u->handle, data, 0, 0, 0) == CL_SUCCESS);
-                        CV_OclDbgAssert(clFinish(q) == CL_SUCCESS);
+                        if (u->tempUMat())
+                        {
+                            CV_Assert(u->mapcount == 0);
+                            void* data = clEnqueueMapBuffer(q, (cl_mem)u->handle, CL_TRUE,
+                                (CL_MAP_READ | CL_MAP_WRITE),
+                                0, u->size, 0, 0, 0, &retval);
+                            CV_Assert(u->origdata == data);
+                            CV_OclDbgAssert(retval == CL_SUCCESS);
+                            if (u->originalUMatData)
+                            {
+                                CV_Assert(u->originalUMatData->data == data);
+                            }
+                            CV_OclDbgAssert(clEnqueueUnmapMemObject(q, (cl_mem)u->handle, data, 0, 0, 0) == CL_SUCCESS);
+                            CV_OclDbgAssert(clFinish(q) == CL_SUCCESS);
+                        }
                     }
                 }
                 u->markHostCopyObsolete(false);
+            }
+            else
+            {
+                // nothing
             }
 #ifdef HAVE_OPENCL_SVM
             if ((u->allocatorFlags_ & svm::OPENCL_SVM_BUFFER_MASK) != 0)
@@ -4545,20 +4617,23 @@ public:
                 clReleaseMemObject((cl_mem)u->handle);
             }
             u->handle = 0;
+            u->markDeviceCopyObsolete(true);
             u->currAllocator = u->prevAllocator;
-            if(u->data && u->copyOnMap() && !(u->flags & UMatData::USER_ALLOCATED))
+            u->prevAllocator = NULL;
+            if(u->data && u->copyOnMap() && u->data != u->origdata)
                 fastFree(u->data);
             u->data = u->origdata;
-            if(u->refcount == 0)
-                u->currAllocator->deallocate(u);
+            u->currAllocator->deallocate(u);
+            u = NULL;
         }
         else
         {
-            CV_Assert(u->refcount == 0);
-            if(u->data && u->copyOnMap() && !(u->flags & UMatData::USER_ALLOCATED))
+            CV_Assert(u->origdata == NULL);
+            if(u->data && u->copyOnMap() && u->data != u->origdata)
             {
                 fastFree(u->data);
                 u->data = 0;
+                u->markHostCopyObsolete(true);
             }
             if (u->allocatorFlags_ & ALLOCATOR_FLAGS_BUFFER_POOL_USED)
             {
@@ -4598,26 +4673,23 @@ public:
                 clReleaseMemObject((cl_mem)u->handle);
             }
             u->handle = 0;
+            u->markDeviceCopyObsolete(true);
             delete u;
+            u = NULL;
         }
+        CV_Assert(u == NULL);
     }
 
+    // synchronized call (external UMatDataAutoLock, see UMat::getMat)
     void map(UMatData* u, int accessFlags) const
     {
-        if(!u)
-            return;
-
-        CV_Assert( u->handle != 0 );
-
-        UMatDataAutoLock autolock(u);
+        CV_Assert(u && u->handle);
 
         if(accessFlags & ACCESS_WRITE)
             u->markDeviceCopyObsolete(true);
 
         cl_command_queue q = (cl_command_queue)Queue::getDefault().ptr();
 
-        // FIXIT Workaround for UMat synchronization issue
-        // if( u->refcount == 0 )
         {
             if( !u->copyOnMap() )
             {
@@ -4650,17 +4722,17 @@ public:
                     return;
                 }
 #endif
-                if (u->data) // FIXIT Workaround for UMat synchronization issue
-                {
-                    //CV_Assert(u->hostCopyObsolete() == false);
-                    return;
-                }
 
-                cl_int retval = 0;
-                u->data = (uchar*)clEnqueueMapBuffer(q, (cl_mem)u->handle, CL_TRUE,
-                                                     (CL_MAP_READ | CL_MAP_WRITE),
-                                                     0, u->size, 0, 0, 0, &retval);
-                if(u->data && retval == CL_SUCCESS)
+                cl_int retval = CL_SUCCESS;
+                if (!u->deviceMemMapped())
+                {
+                    CV_Assert(u->refcount == 1);
+                    CV_Assert(u->mapcount++ == 0);
+                    u->data = (uchar*)clEnqueueMapBuffer(q, (cl_mem)u->handle, CL_TRUE,
+                                                         (CL_MAP_READ | CL_MAP_WRITE),
+                                                         0, u->size, 0, 0, 0, &retval);
+                }
+                if (u->data && retval == CL_SUCCESS)
                 {
                     u->markHostCopyObsolete(false);
                     u->markDeviceMemMapped(true);
@@ -4701,16 +4773,11 @@ public:
 
         UMatDataAutoLock autolock(u);
 
-        // FIXIT Workaround for UMat synchronization issue
-        if(u->refcount > 0)
-            return;
-
         cl_command_queue q = (cl_command_queue)Queue::getDefault().ptr();
         cl_int retval = 0;
         if( !u->copyOnMap() && u->deviceMemMapped() )
         {
             CV_Assert(u->data != NULL);
-            u->markDeviceMemMapped(false);
 #ifdef HAVE_OPENCL_SVM
             if ((u->allocatorFlags_ & svm::OPENCL_SVM_BUFFER_MASK) != 0)
             {
@@ -4730,20 +4797,28 @@ public:
                         u->allocatorFlags_ &= ~svm::OPENCL_SVM_BUFFER_MAP;
                     }
                 }
-                u->data = 0;
+                if (u->refcount == 0)
+                    u->data = 0;
                 u->markDeviceCopyObsolete(false);
-                u->markHostCopyObsolete(false);
+                u->markHostCopyObsolete(true);
                 return;
             }
 #endif
-            CV_Assert( (retval = clEnqueueUnmapMemObject(q,
-                                (cl_mem)u->handle, u->data, 0, 0, 0)) == CL_SUCCESS );
-            if (Device::getDefault().isAMD())
+            if (u->refcount == 0)
             {
-                // required for multithreaded applications (see stitching test)
-                CV_OclDbgAssert(clFinish(q) == CL_SUCCESS);
+                CV_Assert(u->mapcount-- == 1);
+                CV_Assert((retval = clEnqueueUnmapMemObject(q,
+                          (cl_mem)u->handle, u->data, 0, 0, 0)) == CL_SUCCESS);
+                if (Device::getDefault().isAMD())
+                {
+                    // required for multithreaded applications (see stitching test)
+                    CV_OclDbgAssert(clFinish(q) == CL_SUCCESS);
+                }
+                u->markDeviceMemMapped(false);
+                u->data = 0;
+                u->markDeviceCopyObsolete(false);
+                u->markHostCopyObsolete(true);
             }
-            u->data = 0;
         }
         else if( u->copyOnMap() && u->deviceCopyObsolete() )
         {
@@ -4753,9 +4828,9 @@ public:
 #endif
             CV_Assert( (retval = clEnqueueWriteBuffer(q, (cl_mem)u->handle, CL_TRUE, 0,
                                 u->size, alignedPtr.getAlignedPtr(), 0, 0, 0)) == CL_SUCCESS );
+            u->markDeviceCopyObsolete(false);
+            u->markHostCopyObsolete(true);
         }
-        u->markDeviceCopyObsolete(false);
-        u->markHostCopyObsolete(false);
     }
 
     bool checkContinuous(int dims, const size_t sz[],
@@ -4842,7 +4917,7 @@ public:
 
         if( u->data && !u->hostCopyObsolete() )
         {
-            Mat::getStdAllocator()->download(u, dstptr, dims, sz, srcofs, srcstep, dststep);
+            Mat::getDefaultAllocator()->download(u, dstptr, dims, sz, srcofs, srcstep, dststep);
             return;
         }
         CV_Assert( u->handle != 0 );
@@ -4918,17 +4993,22 @@ public:
         else
 #endif
         {
-            AlignedDataPtr<false, true> alignedPtr((uchar*)dstptr, sz[0] * dststep[0], CV_OPENCL_DATA_PTR_ALIGNMENT);
             if( iscontinuous )
             {
-                CV_Assert( clEnqueueReadBuffer(q, (cl_mem)u->handle, CL_TRUE,
-                                               srcrawofs, total, alignedPtr.getAlignedPtr(), 0, 0, 0) >= 0 );
+                AlignedDataPtr<false, true> alignedPtr((uchar*)dstptr, total, CV_OPENCL_DATA_PTR_ALIGNMENT);
+                CV_Assert(clEnqueueReadBuffer(q, (cl_mem)u->handle, CL_TRUE,
+                    srcrawofs, total, alignedPtr.getAlignedPtr(), 0, 0, 0) >= 0 );
             }
             else
             {
+                AlignedDataPtr2D<false, true> alignedPtr((uchar*)dstptr, new_sz[1], new_sz[0], new_dststep[0], CV_OPENCL_DATA_PTR_ALIGNMENT);
+                uchar* ptr = alignedPtr.getAlignedPtr();
+
                 CV_Assert( clEnqueueReadBufferRect(q, (cl_mem)u->handle, CL_TRUE,
-                                new_srcofs, new_dstofs, new_sz, new_srcstep[0], new_srcstep[1],
-                                new_dststep[0], new_dststep[1], alignedPtr.getAlignedPtr(), 0, 0, 0) >= 0 );
+                    new_srcofs, new_dstofs, new_sz,
+                    new_srcstep[0], 0,
+                    new_dststep[0], 0,
+                    ptr, 0, 0, 0) >= 0 );
             }
         }
     }
@@ -4961,7 +5041,7 @@ public:
         //    2. we overwrite part of the matrix, but the GPU copy is out-of-date
         if( u->data && (u->hostCopyObsolete() < u->deviceCopyObsolete() || total == u->size))
         {
-            Mat::getStdAllocator()->upload(u, srcptr, dims, sz, dstofs, dststep, srcstep);
+            Mat::getDefaultAllocator()->upload(u, srcptr, dims, sz, dstofs, dststep, srcstep);
             u->markHostCopyObsolete(false);
             u->markDeviceCopyObsolete(true);
             return;
@@ -5030,17 +5110,22 @@ public:
         else
 #endif
         {
-            AlignedDataPtr<true, false> alignedPtr((uchar*)srcptr, sz[0] * srcstep[0], CV_OPENCL_DATA_PTR_ALIGNMENT);
             if( iscontinuous )
             {
-                CV_Assert( clEnqueueWriteBuffer(q, (cl_mem)u->handle,
-                    CL_TRUE, dstrawofs, total, alignedPtr.getAlignedPtr(), 0, 0, 0) >= 0 );
+                AlignedDataPtr<true, false> alignedPtr((uchar*)srcptr, total, CV_OPENCL_DATA_PTR_ALIGNMENT);
+                CV_Assert(clEnqueueWriteBuffer(q, (cl_mem)u->handle, CL_TRUE,
+                    dstrawofs, total, alignedPtr.getAlignedPtr(), 0, 0, 0) >= 0);
             }
             else
             {
-                CV_Assert( clEnqueueWriteBufferRect(q, (cl_mem)u->handle, CL_TRUE,
-                    new_dstofs, new_srcofs, new_sz, new_dststep[0], new_dststep[1],
-                    new_srcstep[0], new_srcstep[1], alignedPtr.getAlignedPtr(), 0, 0, 0) >= 0 );
+                AlignedDataPtr2D<true, false> alignedPtr((uchar*)srcptr, new_sz[1], new_sz[0], new_srcstep[0], CV_OPENCL_DATA_PTR_ALIGNMENT);
+                uchar* ptr = alignedPtr.getAlignedPtr();
+
+                CV_Assert(clEnqueueWriteBufferRect(q, (cl_mem)u->handle, CL_TRUE,
+                    new_dstofs, new_srcofs, new_sz,
+                    new_dststep[0], 0,
+                    new_srcstep[0], 0,
+                    ptr, 0, 0, 0) >= 0 );
             }
         }
         u->markHostCopyObsolete(true);
@@ -5187,8 +5272,8 @@ public:
             {
                 CV_Assert( (retval = clEnqueueCopyBufferRect(q, (cl_mem)src->handle, (cl_mem)dst->handle,
                                                    new_srcofs, new_dstofs, new_sz,
-                                                   new_srcstep[0], new_srcstep[1],
-                                                   new_dststep[0], new_dststep[1],
+                                                   new_srcstep[0], 0,
+                                                   new_dststep[0], 0,
                                                    0, 0, 0)) == CL_SUCCESS );
             }
         }
@@ -5199,7 +5284,7 @@ public:
 
 #ifdef HAVE_OPENCL_SVM
         if ((dst->allocatorFlags_ & svm::OPENCL_SVM_BUFFER_MASK) == svm::OPENCL_SVM_FINE_GRAIN_BUFFER ||
-                (dst->allocatorFlags_ & svm::OPENCL_SVM_BUFFER_MASK) == svm::OPENCL_SVM_FINE_GRAIN_SYSTEM)
+            (dst->allocatorFlags_ & svm::OPENCL_SVM_BUFFER_MASK) == svm::OPENCL_SVM_FINE_GRAIN_SYSTEM)
         {
             // nothing
         }
