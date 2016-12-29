@@ -190,6 +190,7 @@ bool CvCascadeClassifier::train( const string _cascadeDirName,
     cascadeParams.printAttrs();
     stageParams->printAttrs();
     featureParams->printAttrs();
+    cout << "Number of unique features given windowSize [" << _cascadeParams.winSize.width << "," << _cascadeParams.winSize.height << "] : " << featureEvaluator->getNumFeatures() << "" << endl;
 
     int startNumStages = (int)stageClassifiers.size();
     if ( startNumStages > 1 )
@@ -289,7 +290,7 @@ int CvCascadeClassifier::predict( int sampleIdx )
 {
     CV_DbgAssert( sampleIdx < numPos + numNeg );
     for (vector< Ptr<CvCascadeBoost> >::iterator it = stageClassifiers.begin();
-        it != stageClassifiers.end(); it++ )
+        it != stageClassifiers.end();++it )
     {
         if ( (*it)->predict( sampleIdx ) == 0.f )
             return 0;
@@ -309,7 +310,8 @@ bool CvCascadeClassifier::updateTrainingSet( double minimumAcceptanceRatio, doub
     int proNumNeg = cvRound( ( ((double)numNeg) * ((double)posCount) ) / numPos ); // apply only a fraction of negative samples. double is required since overflow is possible
     int negCount = fillPassedSamples( posCount, proNumNeg, false, minimumAcceptanceRatio, negConsumed );
     if ( !negCount )
-        return false;
+        if ( !(negConsumed > 0 && ((double)negCount+1)/(double)negConsumed <= minimumAcceptanceRatio) )
+            return false;
 
     curNumSamples = posCount + negCount;
     acceptanceRatio = negConsumed == 0 ? 0 : ( (double)negCount/(double)(int64)negConsumed );
@@ -364,7 +366,7 @@ void CvCascadeClassifier::writeStages( FileStorage &fs, const Mat& featureMap ) 
     int i = 0;
     fs << CC_STAGES << "[";
     for( vector< Ptr<CvCascadeBoost> >::const_iterator it = stageClassifiers.begin();
-        it != stageClassifiers.end(); it++, i++ )
+        it != stageClassifiers.end();++it, ++i )
     {
         sprintf( cmnt, "stage %d", i );
         cvWriteComment( fs.fs, cmnt, 0 );
@@ -410,6 +412,7 @@ bool CvCascadeClassifier::readStages( const FileNode &node)
 }
 
 // For old Haar Classifier file saving
+#define ICV_HAAR_TYPE_ID              "opencv-haar-classifier"
 #define ICV_HAAR_SIZE_NAME            "size"
 #define ICV_HAAR_STAGES_NAME          "stages"
 #define ICV_HAAR_TREES_NAME             "trees"
@@ -432,11 +435,12 @@ void CvCascadeClassifier::save( const string filename, bool baseFormat )
     if ( !fs.isOpened() )
         return;
 
-    fs << FileStorage::getDefaultObjectName(filename) << "{";
+    fs << FileStorage::getDefaultObjectName(filename);
     if ( !baseFormat )
     {
         Mat featureMap;
         getUsedFeaturesIdxMap( featureMap );
+        fs << "{";
         writeParams( fs );
         fs << CC_STAGE_NUM << (int)stageClassifiers.size();
         writeStages( fs, featureMap );
@@ -448,6 +452,7 @@ void CvCascadeClassifier::save( const string filename, bool baseFormat )
         CvSeq* weak;
         if ( cascadeParams.featureType != CvFeatureParams::HAAR )
             CV_Error( CV_StsBadFunc, "old file format is used for Haar-like features only");
+        fs << "{:" ICV_HAAR_TYPE_ID;
         fs << ICV_HAAR_SIZE_NAME << "[:" << cascadeParams.winSize.width <<
             cascadeParams.winSize.height << "]";
         fs << ICV_HAAR_STAGES_NAME << "[";
@@ -556,7 +561,7 @@ void CvCascadeClassifier::getUsedFeaturesIdxMap( Mat& featureMap )
     featureMap.setTo(Scalar(-1));
 
     for( vector< Ptr<CvCascadeBoost> >::const_iterator it = stageClassifiers.begin();
-        it != stageClassifiers.end(); it++ )
+        it != stageClassifiers.end();++it )
         (*it)->markUsedFeaturesInMap( featureMap );
 
     for( int fi = 0, idx = 0; fi < varCount; fi++ )
