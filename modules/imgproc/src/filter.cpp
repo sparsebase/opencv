@@ -1354,20 +1354,22 @@ struct RowVec_32f
     RowVec_32f()
     {
         haveSSE = checkHardwareSupport(CV_CPU_SSE);
+        haveAVX2 = checkHardwareSupport(CV_CPU_AVX2);
     }
 
     RowVec_32f( const Mat& _kernel )
     {
         kernel = _kernel;
         haveSSE = checkHardwareSupport(CV_CPU_SSE);
-#if defined USE_IPP_SEP_FILTERS && IPP_DISABLE_BLOCK
+        haveAVX2 = checkHardwareSupport(CV_CPU_AVX2);
+#if defined USE_IPP_SEP_FILTERS
         bufsz = -1;
 #endif
     }
 
     int operator()(const uchar* _src, uchar* _dst, int width, int cn) const
     {
-#if defined USE_IPP_SEP_FILTERS && IPP_DISABLE_BLOCK
+#if defined USE_IPP_SEP_FILTERS
         CV_IPP_CHECK()
         {
             int ret = ippiOperator(_src, _dst, width, cn);
@@ -1386,14 +1388,36 @@ struct RowVec_32f
         int i = 0, k;
         width *= cn;
 
+#if CV_AVX2
+if ( haveAVX2 )
+{
+        for( ; i <= width - 8; i += 8 )
+        {
+            const float* src = src0 + i;
+            __m256 f, x0;
+            __m256 s0 = _mm256_set1_ps(0.0f);
+            for( k = 0; k < _ksize; k++, src += cn )
+            {
+                f = _mm256_set1_ps(_kx[k]);
+                x0 = _mm256_loadu_ps(src);
+#if CV_FMA3
+                s0 = _mm256_fmadd_ps(x0, f, s0);
+#else
+                s0 = _mm256_add_ps(s0, _mm256_mul_ps(x0, f));
+#endif
+            }
+            _mm256_storeu_ps(dst + i, s0);
+        }
+        return i;
+}
+#endif
         for( ; i <= width - 8; i += 8 )
         {
             const float* src = src0 + i;
             __m128 f, s0 = _mm_setzero_ps(), s1 = s0, x0, x1;
             for( k = 0; k < _ksize; k++, src += cn )
             {
-                f = _mm_load_ss(_kx+k);
-                f = _mm_shuffle_ps(f, f, 0);
+                f = _mm_set1_ps(_kx[k]);
 
                 x0 = _mm_loadu_ps(src);
                 x1 = _mm_loadu_ps(src + 4);
@@ -1408,7 +1432,8 @@ struct RowVec_32f
 
     Mat kernel;
     bool haveSSE;
-#if defined USE_IPP_SEP_FILTERS && IPP_DISABLE_BLOCK
+    bool haveAVX2;
+#if defined USE_IPP_SEP_FILTERS
 private:
     mutable int bufsz;
     int ippiOperator(const uchar* _src, uchar* _dst, int width, int cn) const
@@ -1436,10 +1461,10 @@ private:
         float borderValue[] = {0.f, 0.f, 0.f};
         // here is the trick. IPP needs border type and extrapolates the row. We did it already.
         // So we pass anchor=0 and ignore the right tail of results since they are incorrect there.
-        if( (cn == 1 && CV_INSTRUMENT_FUN_IPP(ippiFilterRowBorderPipeline_32f_C1R,(src, step, &dst, roisz, _kx, _ksize, 0,
-                                                            ippBorderRepl, borderValue[0], bufptr)) < 0) ||
-            (cn == 3 && CV_INSTRUMENT_FUN_IPP(ippiFilterRowBorderPipeline_32f_C3R,(src, step, &dst, roisz, _kx, _ksize, 0,
-                                                            ippBorderRepl, borderValue, bufptr)) < 0))
+        if( (cn == 1 && CV_INSTRUMENT_FUN_IPP(ippiFilterRowBorderPipeline_32f_C1R, src, step, &dst, roisz, _kx, _ksize, 0,
+                                                            ippBorderRepl, borderValue[0], bufptr) < 0) ||
+            (cn == 3 && CV_INSTRUMENT_FUN_IPP(ippiFilterRowBorderPipeline_32f_C3R, src, step, &dst, roisz, _kx, _ksize, 0,
+                                                            ippBorderRepl, borderValue, bufptr) < 0))
         {
             setIppErrorStatus();
             return 0;
@@ -1646,18 +1671,24 @@ struct SymmRowSmallVec_32f
 
 struct SymmColumnVec_32f
 {
-    SymmColumnVec_32f() { symmetryType=0; }
+    SymmColumnVec_32f() {
+        symmetryType=0;
+        haveSSE = checkHardwareSupport(CV_CPU_SSE);
+        haveAVX2 = checkHardwareSupport(CV_CPU_AVX2);
+    }
     SymmColumnVec_32f(const Mat& _kernel, int _symmetryType, int, double _delta)
     {
         symmetryType = _symmetryType;
         kernel = _kernel;
         delta = (float)_delta;
+        haveSSE = checkHardwareSupport(CV_CPU_SSE);
+        haveAVX2 = checkHardwareSupport(CV_CPU_AVX2);
         CV_Assert( (symmetryType & (KERNEL_SYMMETRICAL | KERNEL_ASYMMETRICAL)) != 0 );
     }
 
     int operator()(const uchar** _src, uchar* _dst, int width) const
     {
-        if( !checkHardwareSupport(CV_CPU_SSE) )
+        if( !haveSSE )
             return 0;
 
         int ksize2 = (kernel.rows + kernel.cols - 1)/2;
@@ -1667,14 +1698,64 @@ struct SymmColumnVec_32f
         const float** src = (const float**)_src;
         const float *S, *S2;
         float* dst = (float*)_dst;
-        __m128 d4 = _mm_set1_ps(delta);
+        const __m128 d4 = _mm_set1_ps(delta);
+#if CV_AVX2
+        const __m256 d8 = _mm256_set1_ps(delta);
+#endif
 
         if( symmetrical )
         {
+
+#if CV_AVX2
+if ( haveAVX2 )
+{
             for( ; i <= width - 16; i += 16 )
             {
-                __m128 f = _mm_load_ss(ky);
-                f = _mm_shuffle_ps(f, f, 0);
+                __m256 f = _mm256_set1_ps(ky[0]);
+                __m256 s0, s1;
+                __m256 x0;
+                S = src[0] + i;
+                s0 = _mm256_loadu_ps(S);
+#if CV_FMA3
+                s0 = _mm256_fmadd_ps(s0, f, d8);
+#else
+                s0 = _mm256_add_ps(_mm256_mul_ps(s0, f), d8);
+#endif
+                s1 = _mm256_loadu_ps(S+8);
+#if CV_FMA3
+                s1 = _mm256_fmadd_ps(s1, f, d8);
+#else
+                s1 = _mm256_add_ps(_mm256_mul_ps(s1, f), d8);
+#endif
+
+                for( k = 1; k <= ksize2; k++ )
+                {
+                    S = src[k] + i;
+                    S2 = src[-k] + i;
+                    f = _mm256_set1_ps(ky[k]);
+                    x0 = _mm256_add_ps(_mm256_loadu_ps(S), _mm256_loadu_ps(S2));
+#if CV_FMA3
+                    s0 = _mm256_fmadd_ps(x0, f, s0);
+#else
+                    s0 = _mm256_add_ps(s0, _mm256_mul_ps(x0, f));
+#endif
+                    x0 = _mm256_add_ps(_mm256_loadu_ps(S+8), _mm256_loadu_ps(S2+8));
+#if CV_FMA3
+                    s1 = _mm256_fmadd_ps(x0, f, s1);
+#else
+                    s1 = _mm256_add_ps(s1, _mm256_mul_ps(x0, f));
+#endif
+                }
+
+                _mm256_storeu_ps(dst + i, s0);
+                _mm256_storeu_ps(dst + i + 8, s1);
+            }
+            _mm256_zeroupper();
+}
+#endif
+            for( ; i <= width - 16; i += 16 )
+            {
+                __m128 f = _mm_set1_ps(ky[0]);
                 __m128 s0, s1, s2, s3;
                 __m128 x0, x1;
                 S = src[0] + i;
@@ -1691,8 +1772,7 @@ struct SymmColumnVec_32f
                 {
                     S = src[k] + i;
                     S2 = src[-k] + i;
-                    f = _mm_load_ss(ky+k);
-                    f = _mm_shuffle_ps(f, f, 0);
+                    f = _mm_set1_ps(ky[k]);
                     x0 = _mm_add_ps(_mm_load_ps(S), _mm_load_ps(S2));
                     x1 = _mm_add_ps(_mm_load_ps(S+4), _mm_load_ps(S2+4));
                     s0 = _mm_add_ps(s0, _mm_mul_ps(x0, f));
@@ -1711,15 +1791,13 @@ struct SymmColumnVec_32f
 
             for( ; i <= width - 4; i += 4 )
             {
-                __m128 f = _mm_load_ss(ky);
-                f = _mm_shuffle_ps(f, f, 0);
+                __m128 f = _mm_set1_ps(ky[0]);
                 __m128 x0, s0 = _mm_load_ps(src[0] + i);
                 s0 = _mm_add_ps(_mm_mul_ps(s0, f), d4);
 
                 for( k = 1; k <= ksize2; k++ )
                 {
-                    f = _mm_load_ss(ky+k);
-                    f = _mm_shuffle_ps(f, f, 0);
+                    f = _mm_set1_ps(ky[k]);
                     S = src[k] + i;
                     S2 = src[-k] + i;
                     x0 = _mm_add_ps(_mm_load_ps(src[k]+i), _mm_load_ps(src[-k] + i));
@@ -1731,6 +1809,40 @@ struct SymmColumnVec_32f
         }
         else
         {
+#if CV_AVX2
+if ( haveAVX2 )
+{
+            for( ; i <= width - 16; i += 16 )
+            {
+                __m256 f, s0 = d8, s1 = d8;
+                __m256 x0;
+                S = src[0] + i;
+
+                for( k = 1; k <= ksize2; k++ )
+                {
+                    S = src[k] + i;
+                    S2 = src[-k] + i;
+                    f = _mm256_set1_ps(ky[k]);
+                    x0 = _mm256_sub_ps(_mm256_loadu_ps(S), _mm256_loadu_ps(S2));
+#if CV_FMA3
+                    s0 = _mm256_fmadd_ps(x0, f, s0);
+#else
+                    s0 = _mm256_add_ps(s0, _mm256_mul_ps(x0, f));
+#endif
+                    x0 = _mm256_sub_ps(_mm256_loadu_ps(S+8), _mm256_loadu_ps(S2+8));
+#if CV_FMA3
+                    s1 = _mm256_fmadd_ps(x0, f, s1);
+#else
+                    s1 = _mm256_add_ps(s1, _mm256_mul_ps(x0, f));
+#endif
+                }
+
+                _mm256_storeu_ps(dst + i, s0);
+                _mm256_storeu_ps(dst + i + 8, s1);
+            }
+            _mm256_zeroupper();
+}
+#endif
             for( ; i <= width - 16; i += 16 )
             {
                 __m128 f, s0 = d4, s1 = d4, s2 = d4, s3 = d4;
@@ -1741,8 +1853,7 @@ struct SymmColumnVec_32f
                 {
                     S = src[k] + i;
                     S2 = src[-k] + i;
-                    f = _mm_load_ss(ky+k);
-                    f = _mm_shuffle_ps(f, f, 0);
+                    f = _mm_set1_ps(ky[k]);
                     x0 = _mm_sub_ps(_mm_load_ps(S), _mm_load_ps(S2));
                     x1 = _mm_sub_ps(_mm_load_ps(S+4), _mm_load_ps(S2+4));
                     s0 = _mm_add_ps(s0, _mm_mul_ps(x0, f));
@@ -1765,8 +1876,7 @@ struct SymmColumnVec_32f
 
                 for( k = 1; k <= ksize2; k++ )
                 {
-                    f = _mm_load_ss(ky+k);
-                    f = _mm_shuffle_ps(f, f, 0);
+                    f = _mm_set1_ps(ky[k]);
                     x0 = _mm_sub_ps(_mm_load_ps(src[k]+i), _mm_load_ps(src[-k] + i));
                     s0 = _mm_add_ps(s0, _mm_mul_ps(x0, f));
                 }
@@ -1781,6 +1891,8 @@ struct SymmColumnVec_32f
     int symmetryType;
     float delta;
     Mat kernel;
+    bool haveSSE;
+    bool haveAVX2;
 };
 
 
@@ -4509,39 +4621,29 @@ cv::Ptr<cv::FilterEngine> cv::createLinearFilter( int _srcType, int _dstType,
 
 using namespace cv;
 
-struct ReplacementFilter : public hal::Filter2D
+static bool replacementFilter2D(int stype, int dtype, int kernel_type,
+                                uchar * src_data, size_t src_step,
+                                uchar * dst_data, size_t dst_step,
+                                int width, int height,
+                                int full_width, int full_height,
+                                int offset_x, int offset_y,
+                                uchar * kernel_data, size_t kernel_step,
+                                int kernel_width, int kernel_height,
+                                int anchor_x, int anchor_y,
+                                double delta, int borderType, bool isSubmatrix)
 {
     cvhalFilter2D* ctx;
-    bool isInitialized;
-    ReplacementFilter() : ctx(0), isInitialized(false) { }
-    bool init(uchar* kernel_data, size_t kernel_step, int kernel_type, int kernel_width,
-              int kernel_height, int max_width, int max_height, int stype, int dtype, int borderType, double delta,
-              int anchor_x, int anchor_y, bool isSubmatrix, bool isInplace)
-    {
-        int res = cv_hal_filterInit(&ctx, kernel_data, kernel_step, kernel_type, kernel_width, kernel_height, max_width, max_height,
-                                    stype, dtype, borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace);
-        isInitialized = (res == CV_HAL_ERROR_OK);
-        return isInitialized;
-    }
-    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step, int width, int height, int full_width, int full_height, int offset_x, int offset_y)
-    {
-        if (isInitialized)
-        {
-            int res = cv_hal_filter(ctx, src_data, src_step, dst_data, dst_step, width, height, full_width, full_height, offset_x, offset_y);
-            if (res != CV_HAL_ERROR_OK)
-                CV_Error(Error::StsNotImplemented, "HAL Filter returned an error");
-        }
-    }
-    ~ReplacementFilter()
-    {
-        if (isInitialized)
-        {
-            int res = cv_hal_filterFree(ctx);
-            if (res != CV_HAL_ERROR_OK)
-                CV_Error(Error::StsNotImplemented, "HAL Filter Free returned an error");
-        }
-    }
-};
+    int res = cv_hal_filterInit(&ctx, kernel_data, kernel_step, kernel_type, kernel_width, kernel_height, width, height,
+                                stype, dtype, borderType, delta, anchor_x, anchor_y, isSubmatrix, src_data == dst_data);
+    if (res != CV_HAL_ERROR_OK)
+        return false;
+    res = cv_hal_filter(ctx, src_data, src_step, dst_data, dst_step, width, height, full_width, full_height, offset_x, offset_y);
+    bool success = (res == CV_HAL_ERROR_OK);
+    res = cv_hal_filterFree(ctx);
+    if (res != CV_HAL_ERROR_OK)
+        return false;
+    return success;
+}
 
 #ifdef HAVE_IPP
 typedef IppStatus(CV_STDCALL* IppiFilterBorder)(
@@ -4613,8 +4715,17 @@ struct IppFilterTrait<CV_32F>
 };
 
 template <int kdepth>
-struct IppFilter : public hal::Filter2D
+static bool ippFilter2D(int stype, int dtype,
+                        uchar * src_data, size_t src_step,
+                        uchar * dst_data, size_t dst_step,
+                        int width, int height,
+                        uchar * kernel_data, size_t kernel_step,
+                        int kernel_width, int kernel_height,
+                        int anchor_x, int anchor_y,
+                        double delta, int borderType, bool isSubmatrix)
 {
+    CV_INSTRUMENT_REGION_IPP();
+
     typedef IppFilterTrait<kdepth> trait;
     typedef typename trait::kernel_type kernel_type;
 
@@ -4624,105 +4735,93 @@ struct IppFilter : public hal::Filter2D
     IppiBorderType ippBorderType;
     int src_type;
 
-    bool init(uchar* kernel_data, size_t kernel_step, int, int kernel_width, int kernel_height,
-              int max_width, int max_height, int stype, int dtype,
-              int borderType, double delta, int anchor_x, int anchor_y, bool isSubmatrix, bool isInplace)
-    {
-        Point anchor(anchor_x, anchor_y);
+    Point anchor(anchor_x, anchor_y);
 #if IPP_VERSION_X100 >= 900
-        Point ippAnchor((kernel_width - 1) / 2, (kernel_height - 1) / 2);
+    Point ippAnchor((kernel_width - 1) / 2, (kernel_height - 1) / 2);
 #else
-        Point ippAnchor(kernel_width >> 1, kernel_height >> 1);
+    Point ippAnchor(kernel_width >> 1, kernel_height >> 1);
 #endif
-        bool isIsolated = (borderType & BORDER_ISOLATED) != 0;
-        int borderTypeNI = borderType & ~BORDER_ISOLATED;
-        ippBorderType = ippiGetBorderType(borderTypeNI);
-        int ddepth = CV_MAT_DEPTH(dtype);
-        int sdepth = CV_MAT_DEPTH(stype);
+    bool isIsolated = (borderType & BORDER_ISOLATED) != 0;
+    int borderTypeNI = borderType & ~BORDER_ISOLATED;
+    ippBorderType = ippiGetBorderType(borderTypeNI);
+    int ddepth = CV_MAT_DEPTH(dtype);
+    int sdepth = CV_MAT_DEPTH(stype);
 
-#if IPP_VERSION_X100 >= 201700 && IPP_VERSION_X100 < 201702 // IPP bug with 1x1 kernel
-        if(kernel_width == 1 && kernel_height == 1)
-            return false;
+#if IPP_VERSION_X100 >= 201700 && IPP_VERSION_X100 <= 201702 // IPP bug with 1x1 kernel
+    if(kernel_width == 1 && kernel_height == 1)
+        return false;
 #endif
 
-        bool runIpp = true
-                      && (borderTypeNI == BORDER_CONSTANT || borderTypeNI == BORDER_REPLICATE)
-                      && (sdepth == ddepth)
-                      && (getIppFunc(stype))
-                      && ((int)ippBorderType > 0)
-                      && (!isSubmatrix || isIsolated)
-                      && (std::fabs(delta - 0) < DBL_EPSILON)
-                      && (ippAnchor == anchor)
-                      && !isInplace;
+    bool runIpp = true
+            && (borderTypeNI == BORDER_CONSTANT || borderTypeNI == BORDER_REPLICATE)
+            && (sdepth == ddepth)
+            && (getIppFunc(stype))
+            && ((int)ippBorderType > 0)
+            && (!isSubmatrix || isIsolated)
+            && (std::fabs(delta - 0) < DBL_EPSILON)
+            && (ippAnchor == anchor)
+            && src_data != dst_data;
 
-        if (!runIpp)
-            return false;
+    if (!runIpp)
+        return false;
 
-        src_type = stype;
-        int cn = CV_MAT_CN(stype);
-        IppiSize kernelSize = { kernel_width, kernel_height };
-        IppDataType dataType = ippiGetDataType(ddepth);
-        IppDataType kernelType = ippiGetDataType(kdepth);
-        Ipp32s specSize = 0;
-        Ipp32s bufsize = 0;
-        IppiSize dstRoiSize = { max_width, max_height };
-        IppStatus status;
-        status = ippiFilterBorderGetSize(kernelSize, dstRoiSize, dataType, kernelType, cn, &specSize, &bufsize);
-        if (status >= 0) {
-            kernel_type* pKerBuffer = (kernel_type*)kernel_data;
-            size_t good_kernel_step = sizeof(kernel_type) * static_cast<size_t>(kernelSize.width);
+    src_type = stype;
+    int cn = CV_MAT_CN(stype);
+    IppiSize kernelSize = { kernel_width, kernel_height };
+    IppDataType dataType = ippiGetDataType(ddepth);
+    IppDataType kernelType = ippiGetDataType(kdepth);
+    Ipp32s specSize = 0;
+    Ipp32s bufsize = 0;
+    IppiSize dstRoiSize = { width, height };
+    IppStatus status;
+
+    status = ippiFilterBorderGetSize(kernelSize, dstRoiSize, dataType, kernelType, cn, &specSize, &bufsize);
+    if (status < 0)
+        return false;
+
+    kernel_type* pKerBuffer = (kernel_type*)kernel_data;
+    size_t good_kernel_step = sizeof(kernel_type) * static_cast<size_t>(kernelSize.width);
 #if IPP_VERSION_X100 >= 900
-            if (kernel_step != good_kernel_step) {
-                kernelBuffer.Alloc((int)good_kernel_step * kernelSize.height);
-                status = trait::get_copy_fun()((kernel_type*)kernel_data, (int)kernel_step, kernelBuffer, (int)good_kernel_step, kernelSize);
-                if (status < 0)
-                    return false;
-                pKerBuffer = kernelBuffer;
-            }
+    if (kernel_step != good_kernel_step) {
+        kernelBuffer.allocate((int)good_kernel_step * kernelSize.height);
+        status = trait::get_copy_fun()((kernel_type*)kernel_data, (int)kernel_step, kernelBuffer, (int)good_kernel_step, kernelSize);
+        if (status < 0)
+            return false;
+        pKerBuffer = kernelBuffer;
+    }
 #else
-            kernelBuffer.Alloc(good_kernel_step * kernelSize.height);
-            Mat kerFlip(Size(kernelSize.width, kernelSize.height), trait::kernel_type_id, kernelBuffer, (int)good_kernel_step);
-            Mat kernel(Size(kernel_width, kernel_height), trait::kernel_type_id, kernel_data, kernel_step);
-            flip(kernel, kerFlip, -1);
-            pKerBuffer = kernelBuffer;
+    kernelBuffer.Alloc(good_kernel_step * kernelSize.height);
+    Mat kerFlip(Size(kernelSize.width, kernelSize.height), trait::kernel_type_id, kernelBuffer, (int)good_kernel_step);
+    Mat kernel(Size(kernel_width, kernel_height), trait::kernel_type_id, kernel_data, kernel_step);
+    flip(kernel, kerFlip, -1);
+    pKerBuffer = kernelBuffer;
 #endif
-            spec.Alloc(specSize);
-            buffer.Alloc(bufsize);
-            status = trait::runInit(pKerBuffer, kernelSize, 0, dataType, cn, ippRndFinancial, spec);
-            if (status >= 0) {
-                return true;
-            }
-        }
+    spec.allocate(specSize);
+    buffer.allocate(bufsize);
+    status = trait::runInit(pKerBuffer, kernelSize, 0, dataType, cn, ippRndFinancial, spec);
+    if (status < 0) {
         return false;
     }
-
-    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step, int width, int height, int, int, int, int)
-    {
-        CV_INSTRUMENT_REGION_IPP()
-
-        if (dst_data == src_data)
-            CV_Error(Error::StsBadArg, "Inplace IPP Filter2D is not supported");
-        IppiFilterBorder ippiFilterBorder = getIppFunc(src_type);
-        IppiSize dstRoiSize = { width, height };
-        kernel_type borderValue[4] = { 0, 0, 0, 0 };
-        IppStatus status = CV_INSTRUMENT_FUN_IPP(ippiFilterBorder, src_data, (int)src_step, dst_data, (int)dst_step, dstRoiSize, ippBorderType, borderValue, spec, buffer);
-        if (status >= 0) {
-            CV_IMPL_ADD(CV_IMPL_IPP);
-        }
+    IppiFilterBorder ippiFilterBorder = getIppFunc(src_type);
+    kernel_type borderValue[4] = { 0, 0, 0, 0 };
+    status = CV_INSTRUMENT_FUN_IPP(ippiFilterBorder, src_data, (int)src_step, dst_data, (int)dst_step, dstRoiSize, ippBorderType, borderValue, spec, buffer);
+    if (status >= 0) {
+        CV_IMPL_ADD(CV_IMPL_IPP);
+        return true;
     }
-};
+    return false;
+}
 #endif
 
-struct DftFilter : public hal::Filter2D
+static bool dftFilter2D(int stype, int dtype, int kernel_type,
+                        uchar * src_data, size_t src_step,
+                        uchar * dst_data, size_t dst_step,
+                        int width, int height,
+                        uchar * kernel_data, size_t kernel_step,
+                        int kernel_width, int kernel_height,
+                        int anchor_x, int anchor_y,
+                        double delta, int borderType)
 {
-    int src_type;
-    int dst_type;
-    double delta;
-    Mat kernel;
-    Point anchor;
-    int borderType;
-
-    static bool isAppropriate(int stype, int dtype, int kernel_width, int kernel_height)
     {
 #if CV_SSE2
         int sdepth = CV_MAT_DEPTH(stype);
@@ -4733,162 +4832,112 @@ struct DftFilter : public hal::Filter2D
         CV_UNUSED(dtype);
         int dft_filter_size = 50;
 #endif
-        return kernel_width * kernel_height >= dft_filter_size;
+        if (kernel_width * kernel_height < dft_filter_size)
+            return false;
     }
 
-    bool init(uchar* kernel_data, size_t kernel_step, int kernel_type, int kernel_width, int kernel_height,
-              int, int, int stype, int dtype,
-              int borderType_, double delta_, int anchor_x, int anchor_y, bool, bool)
-    {
-        anchor = Point(anchor_x, anchor_y);
-        borderType = borderType_;
-        kernel = Mat(Size(kernel_width, kernel_height), kernel_type, kernel_data, kernel_step);
-        src_type = stype;
-        dst_type = dtype;
-        delta = delta_;
-        if (isAppropriate(stype, dtype, kernel_width, kernel_height))
-            return true;
-        return false;
-    }
+    Point anchor = Point(anchor_x, anchor_y);
+    Mat kernel = Mat(Size(kernel_width, kernel_height), kernel_type, kernel_data, kernel_step);
 
-    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step, int width, int height, int, int, int, int)
-    {
-        Mat src(Size(width, height), src_type, src_data, src_step);
-        Mat dst(Size(width, height), dst_type, dst_data, dst_step);
-        Mat temp;
-        int src_channels = CV_MAT_CN(src_type);
-        int dst_channels = CV_MAT_CN(dst_type);
-        int ddepth = CV_MAT_DEPTH(dst_type);
-        // crossCorr doesn't accept non-zero delta with multiple channels
-        if (src_channels != 1 && delta != 0) {
-            // The semantics of filter2D require that the delta be applied
-            // as floating-point math.  So wee need an intermediate Mat
-            // with a float datatype.  If the dest is already floats,
-            // we just use that.
-            int corrDepth = ddepth;
-            if ((ddepth == CV_32F || ddepth == CV_64F) && src_data != dst_data) {
-                temp = Mat(Size(width, height), dst_type, dst_data, dst_step);
-            } else {
-                corrDepth = ddepth == CV_64F ? CV_64F : CV_32F;
-                temp.create(Size(width, height), CV_MAKETYPE(corrDepth, dst_channels));
-            }
-            crossCorr(src, kernel, temp, src.size(),
-                      CV_MAKETYPE(corrDepth, src_channels),
-                      anchor, 0, borderType);
-            add(temp, delta, temp);
-            if (temp.data != dst_data) {
-                temp.convertTo(dst, dst.type());
-            }
+    Mat src(Size(width, height), stype, src_data, src_step);
+    Mat dst(Size(width, height), dtype, dst_data, dst_step);
+    Mat temp;
+    int src_channels = CV_MAT_CN(stype);
+    int dst_channels = CV_MAT_CN(dtype);
+    int ddepth = CV_MAT_DEPTH(dtype);
+    // crossCorr doesn't accept non-zero delta with multiple channels
+    if (src_channels != 1 && delta != 0) {
+        // The semantics of filter2D require that the delta be applied
+        // as floating-point math.  So wee need an intermediate Mat
+        // with a float datatype.  If the dest is already floats,
+        // we just use that.
+        int corrDepth = ddepth;
+        if ((ddepth == CV_32F || ddepth == CV_64F) && src_data != dst_data) {
+            temp = Mat(Size(width, height), dtype, dst_data, dst_step);
         } else {
-            if (src_data != dst_data)
-                temp = Mat(Size(width, height), dst_type, dst_data, dst_step);
-            else
-                temp.create(Size(width, height), dst_type);
-            crossCorr(src, kernel, temp, src.size(),
-                      CV_MAKETYPE(ddepth, src_channels),
-                      anchor, delta, borderType);
-            if (temp.data != dst_data)
-                temp.copyTo(dst);
+            corrDepth = ddepth == CV_64F ? CV_64F : CV_32F;
+            temp.create(Size(width, height), CV_MAKETYPE(corrDepth, dst_channels));
         }
+        crossCorr(src, kernel, temp, src.size(),
+                  CV_MAKETYPE(corrDepth, src_channels),
+                  anchor, 0, borderType);
+        add(temp, delta, temp);
+        if (temp.data != dst_data) {
+            temp.convertTo(dst, dst.type());
+        }
+    } else {
+        if (src_data != dst_data)
+            temp = Mat(Size(width, height), dtype, dst_data, dst_step);
+        else
+            temp.create(Size(width, height), dtype);
+        crossCorr(src, kernel, temp, src.size(),
+                  CV_MAKETYPE(ddepth, src_channels),
+                  anchor, delta, borderType);
+        if (temp.data != dst_data)
+            temp.copyTo(dst);
     }
-};
+    return true;
+}
 
-struct OcvFilter : public hal::Filter2D
+static void ocvFilter2D(int stype, int dtype, int kernel_type,
+                        uchar * src_data, size_t src_step,
+                        uchar * dst_data, size_t dst_step,
+                        int width, int height,
+                        int full_width, int full_height,
+                        int offset_x, int offset_y,
+                        uchar * kernel_data, size_t kernel_step,
+                        int kernel_width, int kernel_height,
+                        int anchor_x, int anchor_y,
+                        double delta, int borderType)
 {
-    Ptr<FilterEngine> f;
-    int src_type;
-    int dst_type;
-    bool isIsolated;
+    int borderTypeValue = borderType & ~BORDER_ISOLATED;
+    Mat kernel = Mat(Size(kernel_width, kernel_height), kernel_type, kernel_data, kernel_step);
+    Ptr<FilterEngine> f = createLinearFilter(stype, dtype, kernel, Point(anchor_x, anchor_y), delta,
+                                             borderTypeValue);
+    Mat src(Size(width, height), stype, src_data, src_step);
+    Mat dst(Size(width, height), dtype, dst_data, dst_step);
+    f->apply(src, dst, Size(full_width, full_height), Point(offset_x, offset_y));
+}
 
-    bool init(uchar* kernel_data, size_t kernel_step, int kernel_type, int kernel_width,
-              int kernel_height, int, int, int stype, int dtype, int borderType, double delta,
-              int anchor_x, int anchor_y, bool, bool)
-    {
-        isIsolated = (borderType & BORDER_ISOLATED) != 0;
-        src_type = stype;
-        dst_type = dtype;
-        int borderTypeValue = borderType & ~BORDER_ISOLATED;
-        Mat kernel = Mat(Size(kernel_width, kernel_height), kernel_type, kernel_data, kernel_step);
-        f = createLinearFilter(src_type, dst_type, kernel, Point(anchor_x, anchor_y), delta,
-                               borderTypeValue);
-        return true;
-    }
-    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step, int width, int height, int full_width, int full_height, int offset_x, int offset_y)
-    {
-        Mat src(Size(width, height), src_type, src_data, src_step);
-        Mat dst(Size(width, height), dst_type, dst_data, dst_step);
-        f->apply(src, dst, Size(full_width, full_height), Point(offset_x, offset_y));
-    }
-};
-
-
-struct ReplacementSepFilter : public hal::SepFilter2D
+static bool replacementSepFilter(int stype, int dtype, int ktype,
+                                 uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step,
+                                 int width, int height, int full_width, int full_height,
+                                 int offset_x, int offset_y,
+                                 uchar * kernelx_data, int kernelx_len,
+                                 uchar * kernely_data, int kernely_len,
+                                 int anchor_x, int anchor_y, double delta, int borderType)
 {
     cvhalFilter2D *ctx;
-    bool isInitialized;
-    ReplacementSepFilter() : ctx(0), isInitialized(false) {}
-    bool init(int stype, int dtype, int ktype,
-              uchar * kernelx_data, int kernelx_len,
-              uchar * kernely_data, int kernely_len,
-              int anchor_x, int anchor_y, double delta, int borderType)
-    {
-        int res = cv_hal_sepFilterInit(&ctx, stype, dtype, ktype,
-                                       kernelx_data, kernelx_len,
-                                       kernely_data, kernely_len,
-                                       anchor_x, anchor_y, delta, borderType);
-        isInitialized = (res == CV_HAL_ERROR_OK);
-        return isInitialized;
-    }
-    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step,
-             int width, int height, int full_width, int full_height,
-             int offset_x, int offset_y)
-    {
-        if (isInitialized)
-        {
-            int res = cv_hal_sepFilter(ctx, src_data, src_step, dst_data, dst_step, width, height, full_width, full_height, offset_x, offset_y);
-            if (res != CV_HAL_ERROR_OK)
-                CV_Error(Error::StsNotImplemented, "Failed to run HAL sepFilter implementation");
-        }
-    }
-    ~ReplacementSepFilter()
-    {
-        if (isInitialized)
-        {
-            int res = cv_hal_sepFilterFree(ctx);
-            if (res != CV_HAL_ERROR_OK)
-                CV_Error(Error::StsNotImplemented, "Failed to run HAL sepFilter implementation");
-        }
-    }
-};
+    int res = cv_hal_sepFilterInit(&ctx, stype, dtype, ktype,
+                                   kernelx_data, kernelx_len,
+                                   kernely_data, kernely_len,
+                                   anchor_x, anchor_y, delta, borderType);
+    if (res != CV_HAL_ERROR_OK)
+        return false;
+    res = cv_hal_sepFilter(ctx, src_data, src_step, dst_data, dst_step, width, height, full_width, full_height, offset_x, offset_y);
+    bool success = (res == CV_HAL_ERROR_OK);
+    res = cv_hal_sepFilterFree(ctx);
+    if (res != CV_HAL_ERROR_OK)
+        return false;
+    return success;
+}
 
-struct OcvSepFilter : public hal::SepFilter2D
+static void ocvSepFilter(int stype, int dtype, int ktype,
+                         uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step,
+                         int width, int height, int full_width, int full_height,
+                         int offset_x, int offset_y,
+                         uchar * kernelx_data, int kernelx_len,
+                         uchar * kernely_data, int kernely_len,
+                         int anchor_x, int anchor_y, double delta, int borderType)
 {
-    Ptr<FilterEngine> f;
-    int src_type;
-    int dst_type;
-    bool init(int stype, int dtype, int ktype,
-              uchar * kernelx_data, int kernelx_len,
-              uchar * kernely_data, int kernely_len,
-              int anchor_x, int anchor_y, double delta, int borderType)
-    {
-        src_type = stype;
-        dst_type = dtype;
-        Mat kernelX(Size(kernelx_len, 1), ktype, kernelx_data);
-        Mat kernelY(Size(kernely_len, 1), ktype, kernely_data);
-
-        f = createSeparableLinearFilter( stype, dtype, kernelX, kernelY,
-                                         Point(anchor_x, anchor_y),
-                                         delta, borderType & ~BORDER_ISOLATED );
-        return true;
-    }
-    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step,
-             int width, int height, int full_width, int full_height,
-             int offset_x, int offset_y)
-    {
-        Mat src(Size(width, height), src_type, src_data, src_step);
-        Mat dst(Size(width, height), dst_type, dst_data, dst_step);
-        f->apply(src, dst, Size(full_width, full_height), Point(offset_x, offset_y));
-    }
+    Mat kernelX(Size(kernelx_len, 1), ktype, kernelx_data);
+    Mat kernelY(Size(kernely_len, 1), ktype, kernely_data);
+    Ptr<FilterEngine> f = createSeparableLinearFilter(stype, dtype, kernelX, kernelY,
+                                                      Point(anchor_x, anchor_y),
+                                                      delta, borderType & ~BORDER_ISOLATED);
+    Mat src(Size(width, height), stype, src_data, src_step);
+    Mat dst(Size(width, height), dtype, dst_data, dst_step);
+    f->apply(src, dst, Size(full_width, full_height), Point(offset_x, offset_y));
 };
 
 //===================================================================
@@ -4898,97 +4947,124 @@ struct OcvSepFilter : public hal::SepFilter2D
 namespace cv {
 namespace hal {
 
-Ptr<hal::Filter2D> Filter2D::create(uchar* kernel_data, size_t kernel_step, int kernel_type,
-                                   int kernel_width, int kernel_height,
-                                   int max_width, int max_height,
-                                   int stype, int dtype,
-                                   int borderType, double delta, int anchor_x, int anchor_y, bool isSubmatrix, bool isInplace)
-{
-    {
-        ReplacementFilter* impl = new ReplacementFilter();
-        if (impl->init(kernel_data, kernel_step, kernel_type, kernel_width, kernel_height,
-                       max_width, max_height, stype, dtype,
-                       borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace))
-        {
-            return Ptr<hal::Filter2D>(impl);
-        }
-        delete impl;
-    }
 
+CV_DEPRECATED Ptr<hal::Filter2D> Filter2D::create(uchar * , size_t , int ,
+                                 int , int ,
+                                 int , int ,
+                                 int , int ,
+                                 int , double ,
+                                 int , int ,
+                                 bool , bool ) { return Ptr<hal::Filter2D>(); }
+
+CV_DEPRECATED Ptr<hal::SepFilter2D> SepFilter2D::create(int , int , int ,
+                                    uchar * , int ,
+                                    uchar * , int ,
+                                    int , int ,
+                                    double , int )  { return Ptr<hal::SepFilter2D>(); }
+
+
+void filter2D(int stype, int dtype, int kernel_type,
+              uchar * src_data, size_t src_step,
+              uchar * dst_data, size_t dst_step,
+              int width, int height,
+              int full_width, int full_height,
+              int offset_x, int offset_y,
+              uchar * kernel_data, size_t kernel_step,
+              int kernel_width, int kernel_height,
+              int anchor_x, int anchor_y,
+              double delta, int borderType,
+              bool isSubmatrix)
+{
+    bool res;
+    res = replacementFilter2D(stype, dtype, kernel_type,
+                              src_data, src_step,
+                              dst_data, dst_step,
+                              width, height,
+                              full_width, full_height,
+                              offset_x, offset_y,
+                              kernel_data, kernel_step,
+                              kernel_width, kernel_height,
+                              anchor_x, anchor_y,
+                              delta, borderType, isSubmatrix);
+    if (res)
+        return;
 #ifdef HAVE_IPP
     CV_IPP_CHECK()
     {
+        res = false;
         if (kernel_type == CV_32FC1) {
-            IppFilter<CV_32F>* impl = new IppFilter<CV_32F>();
-            if (impl->init(kernel_data, kernel_step, kernel_type, kernel_width, kernel_height,
-                           max_width, max_height, stype, dtype,
-                           borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace))
-            {
-                return Ptr<hal::Filter2D>(impl);
-            }
-            delete impl;
+            res = ippFilter2D<CV_32F>(stype, dtype,
+                                      src_data, src_step,
+                                      dst_data, dst_step,
+                                      width, height,
+                                      kernel_data, kernel_step,
+                                      kernel_width, kernel_height,
+                                      anchor_x, anchor_y,
+                                      delta, borderType, isSubmatrix);
         }
-
-        if (kernel_type == CV_16SC1) {
-            IppFilter<CV_16S>* impl = new IppFilter<CV_16S>();
-            if (impl->init(kernel_data, kernel_step, kernel_type, kernel_width, kernel_height,
-                           max_width, max_height, stype, dtype,
-                           borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace))
-            {
-                return Ptr<hal::Filter2D>(impl);
-            }
-            delete impl;
+        else if (kernel_type == CV_16SC1) {
+            res = ippFilter2D<CV_16S>(stype, dtype,
+                                      src_data, src_step,
+                                      dst_data, dst_step,
+                                      width, height,
+                                      kernel_data, kernel_step,
+                                      kernel_width, kernel_height,
+                                      anchor_x, anchor_y,
+                                      delta, borderType, isSubmatrix);
         }
+        if (res)
+            return;
     }
 #endif
-
-    if (DftFilter::isAppropriate(stype, dtype, kernel_width, kernel_height))
-    {
-        DftFilter* impl = new DftFilter();
-        if (impl->init(kernel_data, kernel_step, kernel_type, kernel_width, kernel_height,
-                       max_width, max_height, stype, dtype,
-                       borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace))
-        {
-            return Ptr<hal::Filter2D>(impl);
-        }
-        delete impl;
-    }
-
-    {
-        OcvFilter* impl = new OcvFilter();
-        impl->init(kernel_data, kernel_step, kernel_type, kernel_width, kernel_height,
-                   max_width, max_height, stype, dtype,
-                   borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace);
-        return Ptr<hal::Filter2D>(impl);
-    }
+    res = dftFilter2D(stype, dtype, kernel_type,
+                      src_data, src_step,
+                      dst_data, dst_step,
+                      width, height,
+                      kernel_data, kernel_step,
+                      kernel_width, kernel_height,
+                      anchor_x, anchor_y,
+                      delta, borderType);
+    if (res)
+        return;
+    ocvFilter2D(stype, dtype, kernel_type,
+                src_data, src_step,
+                dst_data, dst_step,
+                width, height,
+                full_width, full_height,
+                offset_x, offset_y,
+                kernel_data, kernel_step,
+                kernel_width, kernel_height,
+                anchor_x, anchor_y,
+                delta, borderType);
 }
 
 //---------------------------------------------------------------
 
-Ptr<SepFilter2D> SepFilter2D::create(int stype, int dtype, int ktype,
-                                     uchar * kernelx_data, int kernelx_len,
-                                     uchar * kernely_data, int kernely_len,
-                                     int anchor_x, int anchor_y, double delta, int borderType)
+void sepFilter2D(int stype, int dtype, int ktype,
+                 uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step,
+                 int width, int height, int full_width, int full_height,
+                 int offset_x, int offset_y,
+                 uchar * kernelx_data, int kernelx_len,
+                 uchar * kernely_data, int kernely_len,
+                 int anchor_x, int anchor_y, double delta, int borderType)
 {
-    {
-        ReplacementSepFilter * impl = new ReplacementSepFilter();
-        if (impl->init(stype, dtype, ktype,
-                       kernelx_data, kernelx_len,
-                       kernely_data, kernely_len,
-                       anchor_x, anchor_y, delta, borderType))
-        {
-            return Ptr<hal::SepFilter2D>(impl);
-        }
-        delete impl;
-    }
-    {
-        OcvSepFilter * impl = new OcvSepFilter();
-        impl->init(stype, dtype, ktype,
-                   kernelx_data, kernelx_len,
-                   kernely_data, kernely_len,
-                   anchor_x, anchor_y, delta, borderType);
-        return Ptr<hal::SepFilter2D>(impl);
-    }
+
+    bool res = replacementSepFilter(stype, dtype, ktype,
+                                    src_data, src_step, dst_data, dst_step,
+                                    width, height, full_width, full_height,
+                                    offset_x, offset_y,
+                                    kernelx_data, kernelx_len,
+                                    kernely_data, kernely_len,
+                                    anchor_x, anchor_y, delta, borderType);
+    if (res)
+        return;
+    ocvSepFilter(stype, dtype, ktype,
+                 src_data, src_step, dst_data, dst_step,
+                 width, height, full_width, full_height,
+                 offset_x, offset_y,
+                 kernelx_data, kernelx_len,
+                 kernely_data, kernely_len,
+                 anchor_x, anchor_y, delta, borderType);
 }
 
 } // cv::hal::
@@ -5021,10 +5097,12 @@ void cv::filter2D( InputArray _src, OutputArray _dst, int ddepth,
     if( (borderType & BORDER_ISOLATED) == 0 )
         src.locateROI( wsz, ofs );
 
-    Ptr<hal::Filter2D> c = hal::Filter2D::create(kernel.data, kernel.step, kernel.type(), kernel.cols, kernel.rows,
-                                                 dst.cols, dst.rows, src.type(), dst.type(),
-                                                 borderType, delta, anchor.x, anchor.y, src.isSubmatrix(), src.data == dst.data);
-    c->apply(src.data, src.step, dst.data, dst.step, dst.cols, dst.rows, wsz.width, wsz.height, ofs.x, ofs.y);
+    hal::filter2D(src.type(), dst.type(), kernel.type(),
+                  src.data, src.step, dst.data, dst.step,
+                  dst.cols, dst.rows, wsz.width, wsz.height, ofs.x, ofs.y,
+                  kernel.data, kernel.step,  kernel.cols, kernel.rows,
+                  anchor.x, anchor.y,
+                  delta, borderType, src.isSubmatrix());
 }
 
 void cv::sepFilter2D( InputArray _src, OutputArray _dst, int ddepth,
@@ -5055,11 +5133,13 @@ void cv::sepFilter2D( InputArray _src, OutputArray _dst, int ddepth,
 
     Mat contKernelX = kernelX.isContinuous() ? kernelX : kernelX.clone();
     Mat contKernelY = kernelY.isContinuous() ? kernelY : kernelY.clone();
-    Ptr<hal::SepFilter2D> c = hal::SepFilter2D::create(src.type(), dst.type(), kernelX.type(),
-                                                       contKernelX.data, kernelX.cols + kernelX.rows - 1,
-                                                       contKernelY.data, kernelY.cols + kernelY.rows - 1,
-                                                       anchor.x, anchor.y, delta, borderType & ~BORDER_ISOLATED);
-    c->apply(src.data, src.step, dst.data, dst.step, dst.cols, dst.rows, wsz.width, wsz.height, ofs.x, ofs.y);
+
+    hal::sepFilter2D(src.type(), dst.type(), kernelX.type(),
+                     src.data, src.step, dst.data, dst.step,
+                     dst.cols, dst.rows, wsz.width, wsz.height, ofs.x, ofs.y,
+                     contKernelX.data, kernelX.cols + kernelX.rows - 1,
+                     contKernelY.data, kernelY.cols + kernelY.rows - 1,
+                     anchor.x, anchor.y, delta, borderType & ~BORDER_ISOLATED);
 }
 
 
