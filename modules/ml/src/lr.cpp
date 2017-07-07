@@ -127,11 +127,21 @@ Ptr<LogisticRegression> LogisticRegression::create()
     return makePtr<LogisticRegressionImpl>();
 }
 
+Ptr<LogisticRegression> LogisticRegression::load(const String& filepath, const String& nodeName)
+{
+    return Algorithm::load<LogisticRegression>(filepath, nodeName);
+}
+
+
 bool LogisticRegressionImpl::train(const Ptr<TrainData>& trainData, int)
 {
+    CV_TRACE_FUNCTION_SKIP_NESTED();
     // return value
     bool ok = false;
 
+    if (trainData.empty()) {
+        return false;
+    }
     clear();
     Mat _data_i = trainData->getSamples();
     Mat _labels_i = trainData->getResponses();
@@ -304,6 +314,7 @@ float LogisticRegressionImpl::predict(InputArray samples, OutputArray results, i
 
 Mat LogisticRegressionImpl::calc_sigmoid(const Mat& data) const
 {
+    CV_TRACE_FUNCTION();
     Mat dest;
     exp(-data, dest);
     return 1.0/(1.0+dest);
@@ -311,7 +322,8 @@ Mat LogisticRegressionImpl::calc_sigmoid(const Mat& data) const
 
 double LogisticRegressionImpl::compute_cost(const Mat& _data, const Mat& _labels, const Mat& _init_theta)
 {
-    int llambda = 0;
+    CV_TRACE_FUNCTION();
+    float llambda = 0;                   /*changed llambda from int to float to solve issue #7924*/
     int m;
     int n;
     double cost = 0;
@@ -362,9 +374,46 @@ double LogisticRegressionImpl::compute_cost(const Mat& _data, const Mat& _labels
     return cost;
 }
 
+struct LogisticRegressionImpl_ComputeDradient_Impl : ParallelLoopBody
+{
+    const Mat* data;
+    const Mat* theta;
+    const Mat* pcal_a;
+    Mat* gradient;
+    double lambda;
+
+    LogisticRegressionImpl_ComputeDradient_Impl(const Mat& _data, const Mat &_theta, const Mat& _pcal_a, const double _lambda, Mat & _gradient)
+        : data(&_data)
+        , theta(&_theta)
+        , pcal_a(&_pcal_a)
+        , gradient(&_gradient)
+        , lambda(_lambda)
+    {
+
+    }
+
+    void operator()(const cv::Range& r) const
+    {
+        const Mat& _data  = *data;
+        const Mat &_theta = *theta;
+        Mat & _gradient   = *gradient;
+        const Mat & _pcal_a = *pcal_a;
+        const int m = _data.rows;
+        Mat pcal_ab;
+
+        for (int ii = r.start; ii<r.end; ii++)
+        {
+            Mat pcal_b = _data(Range::all(), Range(ii,ii+1));
+            multiply(_pcal_a, pcal_b, pcal_ab, 1);
+
+            _gradient.row(ii) = (1.0/m)*sum(pcal_ab)[0] + (lambda/m) * _theta.row(ii);
+        }
+    }
+};
 
 void LogisticRegressionImpl::compute_gradient(const Mat& _data, const Mat& _labels, const Mat &_theta, const double _lambda, Mat & _gradient )
 {
+    CV_TRACE_FUNCTION();
     const int m = _data.rows;
     Mat pcal_a, pcal_b, pcal_ab;
 
@@ -379,18 +428,14 @@ void LogisticRegressionImpl::compute_gradient(const Mat& _data, const Mat& _labe
     _gradient.row(0) = ((float)1/m) * sum(pcal_ab)[0];
 
     //cout<<"for each training data entry"<<endl;
-    for(int ii = 1;ii<_gradient.rows;ii++)
-    {
-        pcal_b = _data(Range::all(), Range(ii,ii+1));
-        multiply(pcal_a, pcal_b, pcal_ab, 1);
-
-        _gradient.row(ii) = (1.0/m)*sum(pcal_ab)[0] + (_lambda/m) * _theta.row(ii);
-    }
+    LogisticRegressionImpl_ComputeDradient_Impl invoker(_data, _theta, pcal_a, _lambda, _gradient);
+    cv::parallel_for_(cv::Range(1, _gradient.rows), invoker);
 }
 
 
 Mat LogisticRegressionImpl::batch_gradient_descent(const Mat& _data, const Mat& _labels, const Mat& _init_theta)
 {
+    CV_TRACE_FUNCTION();
     // implements batch gradient descent
     if(this->params.alpha<=0)
     {
@@ -547,7 +592,8 @@ void LogisticRegressionImpl::write(FileStorage& fs) const
     {
         CV_Error(CV_StsBadArg,"file can't open. Check file path");
     }
-    string desc = "Logisitic Regression Classifier";
+    writeFormat(fs);
+    string desc = "Logistic Regression Classifier";
     fs<<"classifier"<<desc.c_str();
     fs<<"alpha"<<this->params.alpha;
     fs<<"iterations"<<this->params.num_iters;

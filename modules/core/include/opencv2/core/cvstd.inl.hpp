@@ -41,8 +41,8 @@
 //
 //M*/
 
-#ifndef __OPENCV_CORE_CVSTDINL_HPP__
-#define __OPENCV_CORE_CVSTDINL_HPP__
+#ifndef OPENCV_CORE_CVSTDINL_HPP
+#define OPENCV_CORE_CVSTDINL_HPP
 
 #ifndef OPENCV_NOSTL
 #  include <complex>
@@ -50,6 +50,11 @@
 #endif
 
 //! @cond IGNORED
+
+#ifdef _MSC_VER
+#pragma warning( push )
+#pragma warning( disable: 4127 )
+#endif
 
 namespace cv
 {
@@ -183,6 +188,18 @@ std::ostream& operator << (std::ostream& out, const Mat& mtx)
     return out << Formatter::get()->format(mtx);
 }
 
+static inline
+std::ostream& operator << (std::ostream& out, const UMat& m)
+{
+    return out << m.getMat(ACCESS_READ);
+}
+
+template<typename _Tp> static inline
+std::ostream& operator << (std::ostream& out, const Complex<_Tp>& c)
+{
+    return out << "(" << c.re << "," << c.im << ")";
+}
+
 template<typename _Tp> static inline
 std::ostream& operator << (std::ostream& out, const std::vector<Point_<_Tp> >& vec)
 {
@@ -221,14 +238,7 @@ template<typename _Tp, int n> static inline
 std::ostream& operator << (std::ostream& out, const Vec<_Tp, n>& vec)
 {
     out << "[";
-#ifdef _MSC_VER
-#pragma warning( push )
-#pragma warning( disable: 4127 )
-#endif
     if(Vec<_Tp, n>::depth < CV_32F)
-#ifdef _MSC_VER
-#pragma warning( pop )
-#endif
     {
         for (int i = 0; i < n - 1; ++i) {
             out << (int)vec[i] << ", ";
@@ -258,10 +268,25 @@ std::ostream& operator << (std::ostream& out, const Rect_<_Tp>& rect)
     return out << "[" << rect.width << " x " << rect.height << " from (" << rect.x << ", " << rect.y << ")]";
 }
 
+static inline std::ostream& operator << (std::ostream& out, const MatSize& msize)
+{
+    int i, dims = msize.p[-1];
+    for( i = 0; i < dims; i++ )
+    {
+        out << msize.p[i];
+        if( i < dims-1 )
+            out << " x ";
+    }
+    return out;
+}
 
 #endif // OPENCV_NOSTL
 } // cv
 
+#ifdef _MSC_VER
+#pragma warning( pop )
+#endif
+
 //! @endcond
 
-#endif // __OPENCV_CORE_CVSTDINL_HPP__
+#endif // OPENCV_CORE_CVSTDINL_HPP

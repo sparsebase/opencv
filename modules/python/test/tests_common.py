@@ -21,7 +21,7 @@ class NewOpenCVTests(unittest.TestCase):
     repoPath = None
     extraTestDataPath = None
     # github repository url
-    repoUrl = 'https://raw.github.com/Itseez/opencv/master'
+    repoUrl = 'https://raw.github.com/opencv/opencv/master'
 
     def get_sample(self, filename, iscolor = cv2.IMREAD_COLOR):
         if not filename in self.image_cache:
@@ -42,6 +42,7 @@ class NewOpenCVTests(unittest.TestCase):
         return self.image_cache[filename]
 
     def setUp(self):
+        cv2.setRNGSeed(10)
         self.image_cache = {}
 
     def hashimg(self, im):

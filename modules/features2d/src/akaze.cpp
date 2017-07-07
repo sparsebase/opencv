@@ -167,6 +167,8 @@ namespace cv
                               OutputArray descriptors,
                               bool useProvidedKeypoints)
         {
+            CV_INSTRUMENT_REGION()
+
             Mat img = image.getMat();
             if (img.channels() > 1)
                 cvtColor(image, img, COLOR_BGR2GRAY);
@@ -198,6 +200,7 @@ namespace cv
             if (!useProvidedKeypoints)
             {
                 impl.Feature_Detection(keypoints);
+                impl.Compute_Keypoints_Orientation(keypoints);
             }
 
             if (!mask.empty())
@@ -207,8 +210,10 @@ namespace cv
 
             if( descriptors.needed() )
             {
-                Mat& desc = descriptors.getMatRef();
+                Mat desc;
                 impl.Compute_Descriptors(keypoints, desc);
+                // TODO optimize this copy
+                desc.copyTo(descriptors);
 
                 CV_Assert((!desc.rows || desc.cols == descriptorSize()));
                 CV_Assert((!desc.rows || (desc.type() == descriptorType())));
@@ -217,6 +222,7 @@ namespace cv
 
         void write(FileStorage& fs) const
         {
+            writeFormat(fs);
             fs << "descriptor" << descriptor;
             fs << "descriptor_channels" << descriptor_channels;
             fs << "descriptor_size" << descriptor_size;

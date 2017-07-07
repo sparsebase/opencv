@@ -12,6 +12,7 @@ void drawBoundingBox(Mat image, vector<Point2f> bb);
 void drawStatistics(Mat image, const Stats& stats);
 void printStatistics(string name, Stats stats);
 vector<Point2f> Points(vector<KeyPoint> keypoints);
+Rect2d selectROI(const String &video_name, const Mat &frame);
 
 void drawBoundingBox(Mat image, vector<Point2f> bb)
 {
@@ -55,5 +56,4 @@ vector<Point2f> Points(vector<KeyPoint> keypoints)
     }
     return res;
 }
-
 #endif // UTILS_H

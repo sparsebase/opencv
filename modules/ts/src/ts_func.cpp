@@ -2947,9 +2947,9 @@ MatComparator::operator()(const char* expr1, const char* expr2,
     return ::testing::AssertionFailure()
     << "too big relative difference (" << realmaxdiff << " > "
     << maxdiff << ") between "
-    << MatInfo(m1) << " '" << expr1 << "' and '" << expr2 << "' at " << Mat(loc0) << ".\n\n"
-    << "'" << expr1 << "': " << MatPart(m1part, border > 0 ? &loc : 0) << ".\n\n"
-    << "'" << expr2 << "': " << MatPart(m2part, border > 0 ? &loc : 0) << ".\n";
+    << MatInfo(m1) << " '" << expr1 << "' and '" << expr2 << "' at " << Mat(loc0).t() << ".\n"
+    << "- " << expr1 << ":\n" << MatPart(m1part, border > 0 ? &loc : 0) << ".\n"
+    << "- " << expr2 << ":\n" << MatPart(m2part, border > 0 ? &loc : 0) << ".\n";
 }
 
 void printVersionInfo(bool useStdOut)
@@ -3035,34 +3035,37 @@ void printVersionInfo(bool useStdOut)
     if (checkHardwareSupport(CV_CPU_FMA3)) cpu_features += " fma3";
 #endif
 #if CV_AVX_512F
-    if (checkHardwareSupport(CV_CPU_AVX_512F) cpu_features += " avx-512f";
+    if (checkHardwareSupport(CV_CPU_AVX_512F)) cpu_features += " avx-512f";
 #endif
 #if CV_AVX_512BW
-    if (checkHardwareSupport(CV_CPU_AVX_512BW) cpu_features += " avx-512bw";
+    if (checkHardwareSupport(CV_CPU_AVX_512BW)) cpu_features += " avx-512bw";
 #endif
 #if CV_AVX_512CD
-    if (checkHardwareSupport(CV_CPU_AVX_512CD) cpu_features += " avx-512cd";
+    if (checkHardwareSupport(CV_CPU_AVX_512CD)) cpu_features += " avx-512cd";
 #endif
 #if CV_AVX_512DQ
-    if (checkHardwareSupport(CV_CPU_AVX_512DQ) cpu_features += " avx-512dq";
+    if (checkHardwareSupport(CV_CPU_AVX_512DQ)) cpu_features += " avx-512dq";
 #endif
 #if CV_AVX_512ER
-    if (checkHardwareSupport(CV_CPU_AVX_512ER) cpu_features += " avx-512er";
+    if (checkHardwareSupport(CV_CPU_AVX_512ER)) cpu_features += " avx-512er";
 #endif
 #if CV_AVX_512IFMA512
-    if (checkHardwareSupport(CV_CPU_AVX_512IFMA512) cpu_features += " avx-512ifma512";
+    if (checkHardwareSupport(CV_CPU_AVX_512IFMA512)) cpu_features += " avx-512ifma512";
 #endif
 #if CV_AVX_512PF
-    if (checkHardwareSupport(CV_CPU_AVX_512PF) cpu_features += " avx-512pf";
+    if (checkHardwareSupport(CV_CPU_AVX_512PF)) cpu_features += " avx-512pf";
 #endif
 #if CV_AVX_512VBMI
-    if (checkHardwareSupport(CV_CPU_AVX_512VBMI) cpu_features += " avx-512vbmi";
+    if (checkHardwareSupport(CV_CPU_AVX_512VBMI)) cpu_features += " avx-512vbmi";
 #endif
 #if CV_AVX_512VL
-    if (checkHardwareSupport(CV_CPU_AVX_512VL) cpu_features += " avx-512vl";
+    if (checkHardwareSupport(CV_CPU_AVX_512VL)) cpu_features += " avx-512vl";
 #endif
 #if CV_NEON
     if (checkHardwareSupport(CV_CPU_NEON)) cpu_features += " neon";
+#endif
+#if CV_FP16
+    if (checkHardwareSupport(CV_CPU_FP16)) cpu_features += " fp16";
 #endif
 
     cpu_features.erase(0, 1); // erase initial space

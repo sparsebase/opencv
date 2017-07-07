@@ -94,6 +94,9 @@ PxMDecoder::PxMDecoder()
 {
     m_offset = -1;
     m_buf_supported = true;
+    m_bpp = 0;
+    m_binary = false;
+    m_maxval = 0;
 }
 
 
@@ -190,7 +193,6 @@ bool  PxMDecoder::readData( Mat& img )
 {
     int color = img.channels() > 1;
     uchar* data = img.ptr();
-    int step = (int)img.step;
     PaletteEntry palette[256];
     bool   result = false;
     int  bit_depth = CV_ELEM_SIZE1(m_type)*8;
@@ -229,7 +231,7 @@ bool  PxMDecoder::readData( Mat& img )
         case 1:
             if( !m_binary )
             {
-                for( y = 0; y < m_height; y++, data += step )
+                for( y = 0; y < m_height; y++, data += img.step )
                 {
                     for( x = 0; x < m_width; x++ )
                         src[x] = ReadNumber( m_strm, 1 ) != 0;
@@ -242,7 +244,7 @@ bool  PxMDecoder::readData( Mat& img )
             }
             else
             {
-                for( y = 0; y < m_height; y++, data += step )
+                for( y = 0; y < m_height; y++, data += img.step )
                 {
                     m_strm.getBytes( src, src_pitch );
 
@@ -258,7 +260,7 @@ bool  PxMDecoder::readData( Mat& img )
         ////////////////////////// 8 BPP /////////////////////////
         case 8:
         case 24:
-            for( y = 0; y < m_height; y++, data += step )
+            for( y = 0; y < m_height; y++, data += img.step )
             {
                 if( !m_binary )
                 {
@@ -310,7 +312,7 @@ bool  PxMDecoder::readData( Mat& img )
                         }
                     }
                     else
-                        memcpy( data, src, m_width*(bit_depth/8) );
+                        memcpy( data, src, CV_ELEM_SIZE1(m_type)*m_width);
                 }
                 else
                 {

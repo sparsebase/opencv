@@ -41,15 +41,14 @@
 //
 //M*/
 
-#ifndef __OPENCV_CORE_CVSTD_HPP__
-#define __OPENCV_CORE_CVSTD_HPP__
+#ifndef OPENCV_CORE_CVSTD_HPP
+#define OPENCV_CORE_CVSTD_HPP
 
 #ifndef __cplusplus
 #  error cvstd.hpp header must be compiled as C++
 #endif
 
 #include "opencv2/core/cvdef.h"
-
 #include <cstddef>
 #include <cstring>
 #include <cctype>
@@ -67,6 +66,11 @@
 
 namespace cv
 {
+    static inline uchar abs(uchar a) { return a; }
+    static inline ushort abs(ushort a) { return a; }
+    static inline unsigned abs(unsigned a) { return a; }
+    static inline uint64 abs(uint64 a) { return a; }
+
     using std::min;
     using std::max;
     using std::abs;
@@ -75,14 +79,6 @@ namespace cv
     using std::exp;
     using std::pow;
     using std::log;
-}
-
-namespace std
-{
-    static inline uchar abs(uchar a) { return a; }
-    static inline ushort abs(ushort a) { return a; }
-    static inline unsigned abs(unsigned a) { return a; }
-    static inline uint64 abs(uint64 a) { return a; }
 }
 
 #else
@@ -492,7 +488,7 @@ public:
 
     static const size_t npos = size_t(-1);
 
-    explicit String();
+    String();
     String(const String& str);
     String(const String& str, size_t pos, size_t len = npos);
     String(const char* s);
@@ -630,6 +626,7 @@ String::String(const char* s, size_t n)
     : cstr_(0), len_(0)
 {
     if (!n) return;
+    if (!s) return;
     memcpy(allocate(n), s, n);
 }
 
@@ -637,6 +634,7 @@ inline
 String::String(size_t n, char c)
     : cstr_(0), len_(0)
 {
+    if (!n) return;
     memset(allocate(n), c, n);
 }
 
@@ -645,6 +643,7 @@ String::String(const char* first, const char* last)
     : cstr_(0), len_(0)
 {
     size_t len = (size_t)(last - first);
+    if (!len) return;
     memcpy(allocate(len), first, len);
 }
 
@@ -653,6 +652,7 @@ String::String(Iterator first, Iterator last)
     : cstr_(0), len_(0)
 {
     size_t len = (size_t)(last - first);
+    if (!len) return;
     char* str = allocate(len);
     while (first != last)
     {
@@ -751,7 +751,7 @@ const char* String::begin() const
 inline
 const char* String::end() const
 {
-    return len_ ? cstr_ + 1 : 0;
+    return len_ ? cstr_ + len_ : NULL;
 }
 
 inline
@@ -958,8 +958,9 @@ size_t String::find_last_of(const char* s, size_t pos) const
 inline
 String String::toLowerCase() const
 {
+    if (!cstr_)
+        return String();
     String res(cstr_, len_);
-
     for (size_t i = 0; i < len_; ++i)
         res.cstr_[i] = (char) ::tolower(cstr_[i]);
 
@@ -1066,4 +1067,4 @@ namespace cv
 
 #include "opencv2/core/ptr.inl.hpp"
 
-#endif //__OPENCV_CORE_CVSTD_HPP__
+#endif //OPENCV_CORE_CVSTD_HPP

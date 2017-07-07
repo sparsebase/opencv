@@ -57,6 +57,7 @@ public:
         eps[SOLVEPNP_ITERATIVE] = 1.0e-2;
         eps[SOLVEPNP_EPNP] = 1.0e-2;
         eps[SOLVEPNP_P3P] = 1.0e-2;
+        eps[SOLVEPNP_AP3P] = 1.0e-2;
         eps[SOLVEPNP_DLS] = 1.0e-2;
         eps[SOLVEPNP_UPNP] = 1.0e-2;
         totalTestsCount = 10;
@@ -152,7 +153,7 @@ protected:
         return isTestSuccess;
     }
 
-    void run(int)
+    virtual void run(int)
     {
         ts->set_failed_test_info(cvtest::TS::OK);
 
@@ -161,7 +162,7 @@ protected:
         points.resize(pointsCount);
         generate3DPointCloud(points);
 
-        const int methodsCount = 5;
+        const int methodsCount = 6;
         RNG rng = ts->get_rng();
 
 
@@ -189,7 +190,7 @@ protected:
             }
         }
     }
-    double eps[5];
+    double eps[6];
     int totalTestsCount;
 };
 
@@ -201,6 +202,7 @@ public:
         eps[SOLVEPNP_ITERATIVE] = 1.0e-6;
         eps[SOLVEPNP_EPNP] = 1.0e-6;
         eps[SOLVEPNP_P3P] = 1.0e-4;
+        eps[SOLVEPNP_AP3P] = 1.0e-4;
         eps[SOLVEPNP_DLS] = 1.0e-4;
         eps[SOLVEPNP_UPNP] = 1.0e-4;
         totalTestsCount = 1000;
@@ -222,7 +224,7 @@ protected:
         generatePose(trueRvec, trueTvec, rng);
 
         std::vector<Point3f> opoints;
-        if (method == 2)
+        if (method == 2 || method == 5)
         {
             opoints = std::vector<Point3f>(points.begin(), points.begin()+4);
         }
@@ -251,6 +253,100 @@ protected:
     }
 };
 
+class CV_solveP3P_Test : public CV_solvePnPRansac_Test
+{
+ public:
+  CV_solveP3P_Test()
+  {
+    eps[SOLVEPNP_P3P] = 1.0e-4;
+    eps[SOLVEPNP_AP3P] = 1.0e-4;
+    totalTestsCount = 1000;
+  }
+
+  ~CV_solveP3P_Test() {}
+ protected:
+  virtual bool runTest(RNG& rng, int mode, int method, const vector<Point3f>& points, const double* epsilon, double& maxError)
+  {
+    std::vector<Mat> rvecs, tvecs;
+    Mat trueRvec, trueTvec;
+    Mat intrinsics, distCoeffs;
+    generateCameraMatrix(intrinsics, rng);
+    if (mode == 0)
+      distCoeffs = Mat::zeros(4, 1, CV_64FC1);
+    else
+      generateDistCoeffs(distCoeffs, rng);
+    generatePose(trueRvec, trueTvec, rng);
+
+    std::vector<Point3f> opoints;
+    opoints = std::vector<Point3f>(points.begin(), points.begin()+3);
+
+    vector<Point2f> projectedPoints;
+    projectedPoints.resize(opoints.size());
+    projectPoints(Mat(opoints), trueRvec, trueTvec, intrinsics, distCoeffs, projectedPoints);
+
+    int num_of_solutions = solveP3P(opoints, projectedPoints, intrinsics, distCoeffs, rvecs, tvecs, method);
+    if (num_of_solutions != (int) rvecs.size() || num_of_solutions != (int) tvecs.size() || num_of_solutions == 0)
+      return false;
+
+    double min_rvecDiff = DBL_MAX, min_tvecDiff = DBL_MAX;
+    for (unsigned int i = 0; i < rvecs.size(); ++i) {
+      double rvecDiff = norm(rvecs[i]-trueRvec);
+      min_rvecDiff = std::min(rvecDiff, min_rvecDiff);
+    }
+    for (unsigned int i = 0; i < tvecs.size(); ++i) {
+      double tvecDiff = norm(tvecs[i]-trueTvec);
+      min_tvecDiff = std::min(tvecDiff, min_tvecDiff);
+    }
+    bool isTestSuccess = min_rvecDiff < epsilon[method] && min_tvecDiff < epsilon[method];
+
+    double error = std::max(min_rvecDiff, min_tvecDiff);
+    if (error > maxError)
+      maxError = error;
+
+    return isTestSuccess;
+  }
+
+  virtual void run(int)
+  {
+    ts->set_failed_test_info(cvtest::TS::OK);
+
+    vector<Point3f> points, points_dls;
+    const int pointsCount = 500;
+    points.resize(pointsCount);
+    generate3DPointCloud(points);
+
+    const int methodsCount = 2;
+    int methods[methodsCount] = {SOLVEPNP_P3P, SOLVEPNP_AP3P};
+    RNG rng = ts->get_rng();
+
+    for (int mode = 0; mode < 2; mode++)
+    {
+      for (int method = 0; method < methodsCount; method++)
+      {
+        double maxError = 0;
+        int successfulTestsCount = 0;
+        for (int testIndex = 0; testIndex < totalTestsCount; testIndex++)
+        {
+          if (runTest(rng, mode, methods[method], points, eps, maxError))
+            successfulTestsCount++;
+        }
+        //cout <<  maxError << " " << successfulTestsCount << endl;
+        if (successfulTestsCount < 0.7*totalTestsCount)
+        {
+          ts->printf( cvtest::TS::LOG, "Invalid accuracy for method %d, failed %d tests from %d, maximum error equals %f, distortion mode equals %d\n",
+                      method, totalTestsCount - successfulTestsCount, totalTestsCount, maxError, mode);
+          ts->set_failed_test_info(cvtest::TS::FAIL_BAD_ACCURACY);
+        }
+        cout << "mode: " << mode << ", method: " << method << " -> "
+             << ((double)successfulTestsCount / totalTestsCount) * 100 << "%"
+             << " (err < " << maxError << ")" << endl;
+      }
+    }
+  }
+};
+
+
+TEST(Calib3d_SolveP3P, accuracy) { CV_solveP3P_Test test; test.safe_run();}
 TEST(Calib3d_SolvePnPRansac, accuracy) { CV_solvePnPRansac_Test test; test.safe_run(); }
 TEST(Calib3d_SolvePnP, accuracy) { CV_solvePnP_Test test; test.safe_run(); }
 
@@ -322,10 +418,12 @@ TEST(Calib3d_SolvePnPRansac, input_type)
 
     std::vector<cv::Point3f> points3d;
     std::vector<cv::Point2f> points2d;
-    for (int i = 0; i < numPoints; i++)
+    for (int i = 0; i < numPoints; i+=2)
     {
-        points3d.push_back(cv::Point3i(i, 0, 0));
-        points2d.push_back(cv::Point2i(i, 0));
+        points3d.push_back(cv::Point3i(5+i, 3, 2));
+        points3d.push_back(cv::Point3i(5+i, 3+i, 2+i));
+        points2d.push_back(cv::Point2i(0, i));
+        points2d.push_back(cv::Point2i(-i, i));
     }
     Mat R1, t1, R2, t2, R3, t3, R4, t4;
 
@@ -359,12 +457,16 @@ TEST(Calib3d_SolvePnP, double_support)
     std::vector<cv::Point2d> points2d;
     std::vector<cv::Point3f> points3dF;
     std::vector<cv::Point2f> points2dF;
-    for (int i = 0; i < 10 ; i++)
+    for (int i = 0; i < 10 ; i+=2)
     {
-        points3d.push_back(cv::Point3d(i,0,0));
-        points3dF.push_back(cv::Point3d(i,0,0));
-        points2d.push_back(cv::Point2d(i,0));
-        points2dF.push_back(cv::Point2d(i,0));
+        points3d.push_back(cv::Point3d(5+i, 3, 2));
+        points3dF.push_back(cv::Point3d(5+i, 3, 2));
+        points3d.push_back(cv::Point3d(5+i, 3+i, 2+i));
+        points3dF.push_back(cv::Point3d(5+i, 3+i, 2+i));
+        points2d.push_back(cv::Point2d(0, i));
+        points2dF.push_back(cv::Point2d(0, i));
+        points2d.push_back(cv::Point2d(-i, i));
+        points2dF.push_back(cv::Point2d(-i, i));
     }
     Mat R,t, RF, tF;
     vector<int> inliers;

@@ -45,6 +45,7 @@
 #include "dls.h"
 #include "epnp.h"
 #include "p3p.h"
+#include "ap3p.h"
 #include "opencv2/calib3d/calib3d_c.h"
 
 #include <iostream>
@@ -56,9 +57,11 @@ bool solvePnP( InputArray _opoints, InputArray _ipoints,
                InputArray _cameraMatrix, InputArray _distCoeffs,
                OutputArray _rvec, OutputArray _tvec, bool useExtrinsicGuess, int flags )
 {
+    CV_INSTRUMENT_REGION()
+
     Mat opoints = _opoints.getMat(), ipoints = _ipoints.getMat();
     int npoints = std::max(opoints.checkVector(3, CV_32F), opoints.checkVector(3, CV_64F));
-    CV_Assert( npoints >= 0 && npoints == std::max(ipoints.checkVector(2, CV_32F), ipoints.checkVector(2, CV_64F)) );
+    CV_Assert( npoints >= 4 && npoints == std::max(ipoints.checkVector(2, CV_32F), ipoints.checkVector(2, CV_64F)) );
 
     Mat rvec, tvec;
     if( flags != SOLVEPNP_ITERATIVE )
@@ -75,8 +78,14 @@ bool solvePnP( InputArray _opoints, InputArray _ipoints,
     }
     else
     {
-        _rvec.create(3, 1, CV_64F);
-        _tvec.create(3, 1, CV_64F);
+        int mtype = CV_64F;
+        // use CV_32F if all PnP inputs are CV_32F and outputs are empty
+        if (_ipoints.depth() == _cameraMatrix.depth() && _ipoints.depth() == _opoints.depth() &&
+            _rvec.empty() && _tvec.empty())
+            mtype = _opoints.depth();
+
+        _rvec.create(3, 1, mtype);
+        _tvec.create(3, 1, mtype);
     }
     rvec = _rvec.getMat();
     tvec = _tvec.getMat();
@@ -104,6 +113,18 @@ bool solvePnP( InputArray _opoints, InputArray _ipoints,
         Mat undistortedPoints;
         undistortPoints(ipoints, undistortedPoints, cameraMatrix, distCoeffs);
         p3p P3Psolver(cameraMatrix);
+
+        Mat R;
+        result = P3Psolver.solve(R, tvec, opoints, undistortedPoints);
+        if (result)
+            Rodrigues(R, rvec);
+    }
+    else if (flags == SOLVEPNP_AP3P)
+    {
+        CV_Assert( npoints == 4);
+        Mat undistortedPoints;
+        undistortPoints(ipoints, undistortedPoints, cameraMatrix, distCoeffs);
+        ap3p P3Psolver(cameraMatrix);
 
         Mat R;
         result = P3Psolver.solve(R, tvec, opoints, undistortedPoints);
@@ -158,7 +179,7 @@ public:
           rvec(_rvec), tvec(_tvec) {}
 
     /* Pre: True */
-    /* Post: compute _model with given points an return number of found models */
+    /* Post: compute _model with given points and return number of found models */
     int runKernel( InputArray _m1, InputArray _m2, OutputArray _model ) const
     {
         Mat opoints = _m1.getMat(), ipoints = _m2.getMat();
@@ -195,7 +216,7 @@ public:
         float* err = _err.getMat().ptr<float>();
 
         for ( i = 0; i < count; ++i)
-            err[i] = (float)norm( ipoints_ptr[i] - projpoints_ptr[i] );
+            err[i] = (float)norm( Matx21f(ipoints_ptr[i] - projpoints_ptr[i]), NORM_L2SQR );
 
     }
 
@@ -214,6 +235,7 @@ bool solvePnPRansac(InputArray _opoints, InputArray _ipoints,
                         int iterationsCount, float reprojectionError, double confidence,
                         OutputArray _inliers, int flags)
 {
+    CV_INSTRUMENT_REGION()
 
     Mat opoints0 = _opoints.getMat(), ipoints0 = _ipoints.getMat();
     Mat opoints, ipoints;
@@ -246,7 +268,12 @@ bool solvePnPRansac(InputArray _opoints, InputArray _ipoints,
     int model_points = 5;
     int ransac_kernel_method = SOLVEPNP_EPNP;
 
-    if( npoints == 4 )
+    if( flags == SOLVEPNP_P3P || flags == SOLVEPNP_AP3P)
+    {
+        model_points = 4;
+        ransac_kernel_method = flags;
+    }
+    else if( npoints == 4 )
     {
         model_points = 4;
         ransac_kernel_method = SOLVEPNP_P3P;
@@ -282,7 +309,8 @@ bool solvePnPRansac(InputArray _opoints, InputArray _ipoints,
         opoints_inliers.resize(npoints1);
         ipoints_inliers.resize(npoints1);
         result = solvePnP(opoints_inliers, ipoints_inliers, cameraMatrix,
-                          distCoeffs, rvec, tvec, false, flags == SOLVEPNP_P3P ? SOLVEPNP_EPNP : flags) ? 1 : -1;
+                          distCoeffs, rvec, tvec, false,
+                          (flags == SOLVEPNP_P3P || flags == SOLVEPNP_AP3P) ? SOLVEPNP_EPNP : flags) ? 1 : -1;
     }
 
     if( result <= 0 || _local_model.rows <= 0)
@@ -312,6 +340,59 @@ bool solvePnPRansac(InputArray _opoints, InputArray _ipoints,
         _local_inliers.copyTo(_inliers);
     }
     return true;
+}
+
+int solveP3P( InputArray _opoints, InputArray _ipoints,
+              InputArray _cameraMatrix, InputArray _distCoeffs,
+              OutputArrayOfArrays _rvecs, OutputArrayOfArrays _tvecs, int flags) {
+    CV_INSTRUMENT_REGION()
+
+    Mat opoints = _opoints.getMat(), ipoints = _ipoints.getMat();
+    int npoints = std::max(opoints.checkVector(3, CV_32F), opoints.checkVector(3, CV_64F));
+    CV_Assert( npoints == 3 && npoints == std::max(ipoints.checkVector(2, CV_32F), ipoints.checkVector(2, CV_64F)) );
+    CV_Assert( flags == SOLVEPNP_P3P || flags == SOLVEPNP_AP3P );
+
+    Mat cameraMatrix0 = _cameraMatrix.getMat();
+    Mat distCoeffs0 = _distCoeffs.getMat();
+    Mat cameraMatrix = Mat_<double>(cameraMatrix0);
+    Mat distCoeffs = Mat_<double>(distCoeffs0);
+
+    Mat undistortedPoints;
+    undistortPoints(ipoints, undistortedPoints, cameraMatrix, distCoeffs);
+    std::vector<Mat> Rs, ts;
+
+    int solutions = 0;
+    if (flags == SOLVEPNP_P3P)
+    {
+        p3p P3Psolver(cameraMatrix);
+        solutions = P3Psolver.solve(Rs, ts, opoints, undistortedPoints);
+    }
+    else if (flags == SOLVEPNP_AP3P)
+    {
+        ap3p P3Psolver(cameraMatrix);
+        solutions = P3Psolver.solve(Rs, ts, opoints, undistortedPoints);
+    }
+
+    if (solutions == 0) {
+        return 0;
+    }
+
+    if (_rvecs.needed()) {
+        _rvecs.create(solutions, 1, CV_64F);
+    }
+
+    if (_tvecs.needed()) {
+        _tvecs.create(solutions, 1, CV_64F);
+    }
+
+    for (int i = 0; i < solutions; i++) {
+        Mat rvec;
+        Rodrigues(Rs[i], rvec);
+        _tvecs.getMatRef(i) = ts[i];
+        _rvecs.getMatRef(i) = rvec;
+    }
+
+    return solutions;
 }
 
 }
