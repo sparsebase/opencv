@@ -53,12 +53,9 @@
 #include <cstring>
 #include <cctype>
 
-#ifndef OPENCV_NOSTL
-#  include <string>
-#endif
+#include <string>
 
 // import useful primitives from stl
-#ifndef OPENCV_NOSTL_TRANSITIONAL
 #  include <algorithm>
 #  include <utility>
 #  include <cstdlib> //for abs(int)
@@ -80,21 +77,6 @@ namespace cv
     using std::pow;
     using std::log;
 }
-
-#else
-namespace cv
-{
-    template<typename T> static inline T min(T a, T b) { return a < b ? a : b; }
-    template<typename T> static inline T max(T a, T b) { return a > b ? a : b; }
-    template<typename T> static inline T abs(T a) { return a < 0 ? -a : a; }
-    template<typename T> static inline void swap(T& a, T& b) { T tmp = a; a = b; b = tmp; }
-
-    template<> inline uchar abs(uchar a) { return a; }
-    template<> inline ushort abs(ushort a) { return a; }
-    template<> inline unsigned abs(unsigned a) { return a; }
-    template<> inline uint64 abs(uint64 a) { return a; }
-}
-#endif
 
 namespace cv {
 
@@ -555,7 +537,6 @@ public:
 
     String toLowerCase() const;
 
-#ifndef OPENCV_NOSTL
     String(const std::string& str);
     String(const std::string& str, size_t pos, size_t len = npos);
     String& operator=(const std::string& str);
@@ -564,7 +545,6 @@ public:
 
     friend String operator+ (const String& lhs, const std::string& rhs);
     friend String operator+ (const std::string& lhs, const String& rhs);
-#endif
 
 private:
     char*  cstr_;
@@ -618,6 +598,7 @@ String::String(const char* s)
 {
     if (!s) return;
     size_t len = strlen(s);
+    if (!len) return;
     memcpy(allocate(len), s, len);
 }
 
@@ -685,7 +666,7 @@ String& String::operator=(const char* s)
     deallocate();
     if (!s) return *this;
     size_t len = strlen(s);
-    memcpy(allocate(len), s, len);
+    if (len) memcpy(allocate(len), s, len);
     return *this;
 }
 
@@ -979,8 +960,8 @@ String operator + (const String& lhs, const String& rhs)
 {
     String s;
     s.allocate(lhs.len_ + rhs.len_);
-    memcpy(s.cstr_, lhs.cstr_, lhs.len_);
-    memcpy(s.cstr_ + lhs.len_, rhs.cstr_, rhs.len_);
+    if (lhs.len_) memcpy(s.cstr_, lhs.cstr_, lhs.len_);
+    if (rhs.len_) memcpy(s.cstr_ + lhs.len_, rhs.cstr_, rhs.len_);
     return s;
 }
 
@@ -990,8 +971,8 @@ String operator + (const String& lhs, const char* rhs)
     String s;
     size_t rhslen = strlen(rhs);
     s.allocate(lhs.len_ + rhslen);
-    memcpy(s.cstr_, lhs.cstr_, lhs.len_);
-    memcpy(s.cstr_ + lhs.len_, rhs, rhslen);
+    if (lhs.len_) memcpy(s.cstr_, lhs.cstr_, lhs.len_);
+    if (rhslen) memcpy(s.cstr_ + lhs.len_, rhs, rhslen);
     return s;
 }
 
@@ -1001,8 +982,8 @@ String operator + (const char* lhs, const String& rhs)
     String s;
     size_t lhslen = strlen(lhs);
     s.allocate(lhslen + rhs.len_);
-    memcpy(s.cstr_, lhs, lhslen);
-    memcpy(s.cstr_ + lhslen, rhs.cstr_, rhs.len_);
+    if (lhslen) memcpy(s.cstr_, lhs, lhslen);
+    if (rhs.len_) memcpy(s.cstr_ + lhslen, rhs.cstr_, rhs.len_);
     return s;
 }
 
@@ -1011,7 +992,7 @@ String operator + (const String& lhs, char rhs)
 {
     String s;
     s.allocate(lhs.len_ + 1);
-    memcpy(s.cstr_, lhs.cstr_, lhs.len_);
+    if (lhs.len_) memcpy(s.cstr_, lhs.cstr_, lhs.len_);
     s.cstr_[lhs.len_] = rhs;
     return s;
 }
@@ -1022,7 +1003,7 @@ String operator + (char lhs, const String& rhs)
     String s;
     s.allocate(rhs.len_ + 1);
     s.cstr_[0] = lhs;
-    memcpy(s.cstr_ + 1, rhs.cstr_, rhs.len_);
+    if (rhs.len_) memcpy(s.cstr_ + 1, rhs.cstr_, rhs.len_);
     return s;
 }
 
@@ -1049,21 +1030,10 @@ static inline bool operator>= (const String& lhs, const char*   rhs) { return lh
 
 } // cv
 
-#ifndef OPENCV_NOSTL_TRANSITIONAL
 namespace std
 {
     static inline void swap(cv::String& a, cv::String& b) { a.swap(b); }
 }
-#else
-namespace cv
-{
-    template<> inline
-    void swap<cv::String>(cv::String& a, cv::String& b)
-    {
-        a.swap(b);
-    }
-}
-#endif
 
 #include "opencv2/core/ptr.inl.hpp"
 

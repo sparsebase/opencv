@@ -43,7 +43,12 @@
 #include "../precomp.hpp"
 #include "layers_common.hpp"
 #include "op_halide.hpp"
+#include "opencl_kernels_dnn.hpp"
 #include <opencv2/dnn/shape_utils.hpp>
+
+#ifdef HAVE_OPENCL
+using namespace cv::dnn::ocl4dnn;
+#endif
 
 namespace cv
 {
@@ -54,6 +59,11 @@ class FullyConnectedLayerImpl : public InnerProductLayer
 {
 public:
     enum { VEC_ALIGN = 8 };
+
+#ifdef HAVE_OPENCL
+    Ptr<OCL4DNNInnerProduct<float> > innerProductOp;
+    std::vector<UMat> umat_blobs;
+#endif
 
     FullyConnectedLayerImpl(const LayerParams& params)
     {
@@ -84,6 +94,12 @@ public:
             biasMat = blobs[1] = blobs[1].reshape(1, 1);
         else
             biasMat = Mat::zeros(1, numOutput, weightsMat.type());
+
+#ifdef HAVE_OPENCL
+        size_t n = blobs.size();
+        umat_blobs.resize(n);
+        for (int i = 0; i < n; i++) umat_blobs[i] = blobs[i].getUMat(ACCESS_READ);
+#endif
     }
 
     bool getMemoryShapes(const std::vector<MatShape> &inputs,
@@ -91,14 +107,18 @@ public:
                          std::vector<MatShape> &outputs,
                          std::vector<MatShape> &) const
     {
-        CV_Assert(inputs.size() > 0);
+        CV_Assert(inputs.size() == 1);
         CV_Assert(1 <= blobs.size() && blobs.size() <= 2);
         CV_Assert(blobs[0].dims == 2);
 
         int cAxis = clamp(axis, inputs[0]);
-        int outerSize = total(inputs[0], 0, cAxis);
         int numOutput = blobs[0].size[0];
-        outputs.resize(inputs.size(), shape(outerSize, numOutput));
+        MatShape outShape(cAxis + 1);
+        for (int i = 0; i < cAxis; ++i)
+            outShape[i] = inputs[0][i];
+        outShape.back() = numOutput;
+
+        outputs.resize(inputs.size(), outShape);
 
         CV_Assert(!bias || (size_t)numOutput == blobs[1].total());
         return false;
@@ -119,7 +139,7 @@ public:
     class FullyConnected : public ParallelLoopBody
     {
     public:
-        FullyConnected() : srcMat(0), weights(0), biasMat(0), activ(0), dstMat(0), nstripes(0), useAVX2(false) {}
+        FullyConnected() : srcMat(0), weights(0), biasMat(0), activ(0), dstMat(0), nstripes(0), useAVX(false), useAVX2(false) {}
 
         static void run(const Mat& srcMat, const Mat& weights, const Mat& biasMat,
                         Mat& dstMat, const ActivationLayer* activ, int nstripes)
@@ -139,6 +159,7 @@ public:
             p.dstMat = &dstMat;
             p.nstripes = nstripes;
             p.activ = activ;
+            p.useAVX = checkHardwareSupport(CPU_AVX);
             p.useAVX2 = checkHardwareSupport(CPU_AVX2);
 
             parallel_for_(Range(0, nstripes), p, nstripes);
@@ -176,7 +197,12 @@ public:
 
             #if CV_TRY_AVX2
                 if( useAVX2 )
-                    fastGEMM1T_avx2( sptr, wptr, wstep, biasptr, dptr, nw, vecsize);
+                    opt_AVX2::fastGEMM1T( sptr, wptr, wstep, biasptr, dptr, nw, vecsize);
+                else
+            #endif
+            #if CV_TRY_AVX
+                if( useAVX )
+                    opt_AVX::fastGEMM1T( sptr, wptr, wstep, biasptr, dptr, nw, vecsize);
                 else
             #endif
                 {
@@ -185,19 +211,19 @@ public:
             #if CV_SIMD128
                     for( ; i <= nw - 4; i += 4, wptr += 4*wstep )
                     {
-                        vfloat32x4 vs0 = v_setall_f32(0.f), vs1 = v_setall_f32(0.f);
-                        vfloat32x4 vs2 = v_setall_f32(0.f), vs3 = v_setall_f32(0.f);
+                        v_float32x4 vs0 = v_setall_f32(0.f), vs1 = v_setall_f32(0.f);
+                        v_float32x4 vs2 = v_setall_f32(0.f), vs3 = v_setall_f32(0.f);
 
                         for( k = 0; k < vecsize; k += 4 )
                         {
-                            vfloat32x4 v = v_load_aligned(sptr + k);
+                            v_float32x4 v = v_load_aligned(sptr + k);
                             vs0 += v*v_load_aligned(wptr + k);
                             vs1 += v*v_load_aligned(wptr + wstep + k);
                             vs2 += v*v_load_aligned(wptr + wstep*2 + k);
                             vs3 += v*v_load_aligned(wptr + wstep*3 + k);
                         }
 
-                        vfloat32x4 s = v_reduce_sum4(vs0, vs1, vs2, vs3);
+                        v_float32x4 s = v_reduce_sum4(vs0, vs1, vs2, vs3);
                         s += v_load(biasptr + i);
                         v_store(dptr + i, s);
                     }
@@ -228,13 +254,81 @@ public:
         const ActivationLayer* activ;
         Mat* dstMat;
         int nstripes;
+        bool useAVX;
         bool useAVX2;
     };
+
+#ifdef HAVE_OPENCL
+    bool forward_ocl(std::vector<Mat*> &input, std::vector<Mat> &output)
+    {
+        int axisCan = clamp(axis, input[0]->dims);
+        int numOutput = blobs[0].size[0];
+        int innerSize = blobs[0].size[1];
+        int outerSize = input[0]->total(0, axisCan);
+        bool ret = true;
+
+        if (innerProductOp.empty())
+        {
+            OCL4DNNInnerProductConfig config;
+            config.num_output = numOutput;
+            config.bias_term = bias;
+            config.M = outerSize;
+            config.K = innerSize;
+
+            innerProductOp = Ptr<OCL4DNNInnerProduct<float> >(new OCL4DNNInnerProduct<float>(config));
+        }
+
+        UMat biasOnesMat = UMat::ones(outerSize, 1, umat_blobs[0].type());
+        for (size_t i = 0; i < input.size(); i++)
+        {
+            UMat srcMat, dstMat;
+            srcMat = input[i]->reshape(1, outerSize).getUMat(ACCESS_READ);
+            dstMat = output[i].reshape(1, outerSize).getUMat(ACCESS_WRITE);
+            dstMat.setTo(0.0f);
+
+            if (!innerProductOp->Forward(srcMat, umat_blobs[0], (bias) ? umat_blobs[1] : UMat(), dstMat))
+            {
+                ret = false;
+                break;
+            }
+
+            if (bias && (outerSize > 1))
+            {
+                UMat& biases = umat_blobs[1];
+                cv::gemm(biasOnesMat, biases, 1, dstMat, 1, dstMat, 0);
+            }
+        }
+
+        if (ret) return true;
+
+        UMat& weights = umat_blobs[0];
+        for (size_t i = 0; i < input.size(); i++)
+        {
+            UMat srcMat, dstMat;
+            srcMat = input[i]->reshape(1, outerSize).getUMat(ACCESS_READ);
+            dstMat = output[i].reshape(1, outerSize).getUMat(ACCESS_WRITE);
+
+            cv::gemm(srcMat, weights, 1, noArray(), 0, dstMat, GEMM_2_T);
+
+            if (bias)
+            {
+                UMat& biases = umat_blobs[1];
+                cv::gemm(biasOnesMat, biases, 1, dstMat, 1, dstMat, 0);
+            }
+        }
+
+        return true;
+    }
+#endif
 
     void forward(std::vector<Mat*> &input, std::vector<Mat> &output, std::vector<Mat> &)
     {
         CV_TRACE_FUNCTION();
         CV_TRACE_ARG_VALUE(name, "name", name.c_str());
+
+        CV_OCL_RUN((preferableTarget == DNN_TARGET_OPENCL) &&
+                   OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
+                   forward_ocl(input, output))
 
         int axisCan = clamp(axis, input[0]->dims);
         int outerSize = input[0]->total(0, axisCan);

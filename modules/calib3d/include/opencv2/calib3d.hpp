@@ -237,7 +237,8 @@ enum { SOLVEPNP_ITERATIVE = 0,
        SOLVEPNP_P3P       = 2, //!< Complete Solution Classification for the Perspective-Three-Point Problem @cite gao2003complete
        SOLVEPNP_DLS       = 3, //!< A Direct Least-Squares (DLS) Method for PnP  @cite hesch2011direct
        SOLVEPNP_UPNP      = 4, //!< Exhaustive Linearization for Robust Camera Pose and Focal Length Estimation @cite penate2013exhaustive
-       SOLVEPNP_AP3P      = 5  //!< An Efficient Algebraic Solution to the Perspective-Three-Point Problem @cite Ke17
+       SOLVEPNP_AP3P      = 5, //!< An Efficient Algebraic Solution to the Perspective-Three-Point Problem @cite Ke17
+       SOLVEPNP_MAX_COUNT      //!< Used for count
 };
 
 enum { CALIB_CB_ADAPTIVE_THRESH = 1,
@@ -627,6 +628,13 @@ makes the function resistant to outliers.
 @note
    -   An example of how to use solvePNPRansac for object detection can be found at
         opencv_source_code/samples/cpp/tutorial_code/calib3d/real_time_pose_estimation/
+   -   The default method used to estimate the camera pose for the Minimal Sample Sets step
+       is #SOLVEPNP_EPNP. Exceptions are:
+         - if you choose #SOLVEPNP_P3P or #SOLVEPNP_AP3P, these methods will be used.
+         - if the number of input points is equal to 4, #SOLVEPNP_P3P is used.
+   -   The method used to estimate the camera pose using all the inliers is defined by the
+       flags parameters unless it is equal to #SOLVEPNP_P3P or #SOLVEPNP_AP3P. In this case,
+       the method #SOLVEPNP_EPNP will be used instead.
  */
 CV_EXPORTS_W bool solvePnPRansac( InputArray objectPoints, InputArray imagePoints,
                                   InputArray cameraMatrix, InputArray distCoeffs,
@@ -775,6 +783,14 @@ struct CV_EXPORTS_W_SIMPLE CirclesGridFinderParameters
     GridType gridType;
 };
 
+struct CV_EXPORTS_W_SIMPLE CirclesGridFinderParameters2 : public CirclesGridFinderParameters
+{
+    CV_WRAP CirclesGridFinderParameters2();
+
+    CV_PROP_RW float squareSize; //!< Distance between two adjacent points. Used by CALIB_CB_CLUSTERING.
+    CV_PROP_RW float maxRectifiedDistance; //!< Max deviation from predicion. Used by CALIB_CB_CLUSTERING.
+};
+
 /** @brief Finds centers in the grid of circles.
 
 @param image grid view of input circles; it must be an 8-bit grayscale or color image.
@@ -811,6 +827,12 @@ CV_EXPORTS_W bool findCirclesGrid( InputArray image, Size patternSize,
                                    OutputArray centers, int flags,
                                    const Ptr<FeatureDetector> &blobDetector,
                                    CirclesGridFinderParameters parameters);
+
+/** @overload */
+CV_EXPORTS_W bool findCirclesGrid2( InputArray image, Size patternSize,
+                                   OutputArray centers, int flags,
+                                   const Ptr<FeatureDetector> &blobDetector,
+                                   CirclesGridFinderParameters2 parameters);
 
 /** @overload */
 CV_EXPORTS_W bool findCirclesGrid( InputArray image, Size patternSize,

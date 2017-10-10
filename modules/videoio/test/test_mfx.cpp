@@ -30,24 +30,24 @@ TEST(Videoio_MFX, write_invalid)
 {
     const string filename = cv::tempfile(".264");
     VideoWriter writer;
-    bool res;
-    ASSERT_NO_THROW(res = writer.open(CAP_INTEL_MFX, filename, VideoWriter::fourcc('H', '2', '6', '4'), 1, Size(641, 480), true));
+    bool res = true;
+    ASSERT_NO_THROW(res = writer.open(filename, CAP_INTEL_MFX, VideoWriter::fourcc('H', '2', '6', '4'), 1, Size(641, 480), true));
     EXPECT_FALSE(res);
     EXPECT_FALSE(writer.isOpened());
-    ASSERT_NO_THROW(res = writer.open(CAP_INTEL_MFX,filename, VideoWriter::fourcc('H', '2', '6', '4'), 1, Size(640, 481), true));
+    ASSERT_NO_THROW(res = writer.open(filename, CAP_INTEL_MFX, VideoWriter::fourcc('H', '2', '6', '4'), 1, Size(640, 481), true));
     EXPECT_FALSE(res);
     EXPECT_FALSE(writer.isOpened());
-    ASSERT_NO_THROW(res = writer.open(CAP_INTEL_MFX,filename, VideoWriter::fourcc('A', 'B', 'C', 'D'), 1, Size(640, 480), true));
+    ASSERT_NO_THROW(res = writer.open(filename, CAP_INTEL_MFX, VideoWriter::fourcc('A', 'B', 'C', 'D'), 1, Size(640, 480), true));
     EXPECT_FALSE(res);
     EXPECT_FALSE(writer.isOpened());
-    ASSERT_NO_THROW(res = writer.open(CAP_INTEL_MFX,String(), VideoWriter::fourcc('H', '2', '6', '4'), 1, Size(640, 480), true));
+    ASSERT_NO_THROW(res = writer.open(String(), CAP_INTEL_MFX, VideoWriter::fourcc('H', '2', '6', '4'), 1, Size(640, 480), true));
     EXPECT_FALSE(res);
     EXPECT_FALSE(writer.isOpened());
-    ASSERT_NO_THROW(res = writer.open(CAP_INTEL_MFX,filename, VideoWriter::fourcc('H', '2', '6', '4'), 0, Size(640, 480), true));
+    ASSERT_ANY_THROW(res = writer.open(filename, CAP_INTEL_MFX, VideoWriter::fourcc('H', '2', '6', '4'), 0, Size(640, 480), true));
     EXPECT_FALSE(res);
     EXPECT_FALSE(writer.isOpened());
 
-    ASSERT_NO_THROW(res = writer.open(CAP_INTEL_MFX,filename, VideoWriter::fourcc('H', '2', '6', '4'), 30, Size(640, 480), true));
+    ASSERT_NO_THROW(res = writer.open(filename, CAP_INTEL_MFX, VideoWriter::fourcc('H', '2', '6', '4'), 30, Size(640, 480), true));
     ASSERT_TRUE(res);
     ASSERT_TRUE(writer.isOpened());
     Mat t;
@@ -71,14 +71,7 @@ const int FRAME_COUNT = 20;
 
 inline void generateFrame(int i, Mat & frame)
 {
-    frame = 0;
-    ostringstream buf; buf << "Frame " << setw(2) << setfill('0') << i + 1;
-    int baseLine = 0;
-    Size box = getTextSize(buf.str(), FONT_HERSHEY_COMPLEX, 2, 5, &baseLine);
-    putText(frame, buf.str(), Point((frame.cols - box.width) / 2, (frame.rows - box.height) / 2 + baseLine),
-            FONT_HERSHEY_COMPLEX, 2, Scalar(255, 255, 255), 5, LINE_AA);
-    Point p(i * frame.cols / (FRAME_COUNT - 1), i * frame.rows / (FRAME_COUNT - 1));
-    circle(frame, p, 20, Scalar(200, 25, 55), 5, LINE_AA);
+    generateFrame(i, FRAME_COUNT, frame);
 }
 
 inline int fourccByExt(const String &ext)
@@ -110,7 +103,7 @@ TEST_P(Videoio_MFX, read_write_raw)
 
     // Write video
     VideoWriter writer;
-    writer.open(CAP_INTEL_MFX, filename, fourcc, FPS, FRAME_SIZE, isColor);
+    writer.open(filename, CAP_INTEL_MFX, fourcc, FPS, FRAME_SIZE, isColor);
     ASSERT_TRUE(writer.isOpened());
     Mat frame(FRAME_SIZE, CV_8UC3);
     for (int i = 0; i < FRAME_COUNT; ++i)
@@ -140,9 +133,9 @@ TEST_P(Videoio_MFX, read_write_raw)
         EXPECT_EQ(goodFrame.type(), frame.type());
         double psnr = cvtest::PSNR(goodFrame, frame);
         if (fourcc == VideoWriter::fourcc('M', 'P', 'G', '2'))
-            EXPECT_GT(psnr, 37); // experimentally chosen value
+            EXPECT_GT(psnr, 31); // experimentally chosen value
         else
-            EXPECT_GT(psnr, 43); // experimentally chosen value
+            EXPECT_GT(psnr, 33); // experimentally chosen value
         goodFrames.pop();
     }
     EXPECT_FALSE(cap.read(frame));

@@ -146,12 +146,18 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
          */
         virtual void copyToHost() = 0;
 
+        /**
+         * @brief Indicate that an actual data is on CPU.
+         */
+        virtual void setHostDirty() = 0;
+
         int backendId;  //!< Backend identifier.
         int targetId;   //!< Target identifier.
     };
 
     class CV_EXPORTS ActivationLayer;
     class CV_EXPORTS BatchNormLayer;
+    class CV_EXPORTS ScaleLayer;
 
     /** @brief This interface class allows to build new Layers - are building blocks of networks.
      *
@@ -269,6 +275,19 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
          */
         virtual bool setBatchNorm(const Ptr<BatchNormLayer>& layer);
 
+        /**
+         * @brief Tries to attach to the layer the subsequent scaling layer, i.e. do the layer fusion in a partial case.
+         * @param[in] layer The subsequent scaling layer.
+         *
+         * Returns true if the scaling layer has been attached successfully.
+         */
+        virtual bool setScale(const Ptr<ScaleLayer>& layer);
+
+        /**
+         * @brief "Deattaches" all the layers, attached to particular layer.
+         */
+        virtual void unsetAttached();
+
         virtual bool getMemoryShapes(const std::vector<MatShape> &inputs,
                                      const int requiredOutputs,
                                      std::vector<MatShape> &outputs,
@@ -278,6 +297,7 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
 
         CV_PROP String name; //!< Name of the layer instance, can be used for logging or other internal purposes.
         CV_PROP String type; //!< Type name which was used for creating layer by layer factory.
+        CV_PROP int preferableTarget; //!< prefer target for layer forwarding
 
         Layer();
         explicit Layer(const LayerParams &params);      //!< Initializes only #name, #type and #blobs fields.
@@ -331,7 +351,7 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
         CV_WRAP Ptr<Layer> getLayer(LayerId layerId);
 
         /** @brief Returns pointers to input layers of specific layer. */
-        CV_WRAP std::vector<Ptr<Layer> > getLayerInputs(LayerId layerId);
+        std::vector<Ptr<Layer> > getLayerInputs(LayerId layerId); // FIXIT: CV_WRAP
 
         /** @brief Delete layer for the network (not implemented yet) */
         CV_WRAP void deleteLayer(LayerId layer);
@@ -371,28 +391,28 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
         /** @brief Runs forward pass to compute output of layer with name @p outputName.
          *  @param outputName name for layer which output is needed to get
          *  @return blob for first output of specified layer.
-          * @details By default runs forward pass for the whole network.
-          */
+         *  @details By default runs forward pass for the whole network.
+         */
         CV_WRAP Mat forward(const String& outputName = String());
 
         /** @brief Runs forward pass to compute output of layer with name @p outputName.
          *  @param outputBlobs contains all output blobs for specified layer.
          *  @param outputName name for layer which output is needed to get
-          * @details If @p outputName is empty, runs forward pass for the whole network.
-          */
+         *  @details If @p outputName is empty, runs forward pass for the whole network.
+         */
         CV_WRAP void forward(std::vector<Mat>& outputBlobs, const String& outputName = String());
 
         /** @brief Runs forward pass to compute outputs of layers listed in @p outBlobNames.
          *  @param outputBlobs contains blobs for first outputs of specified layers.
          *  @param outBlobNames names for layers which outputs are needed to get
-          */
+         */
         CV_WRAP void forward(std::vector<Mat>& outputBlobs,
                              const std::vector<String>& outBlobNames);
 
         /** @brief Runs forward pass to compute outputs of layers listed in @p outBlobNames.
          *  @param outputBlobs contains all output blobs for each layer specified in @p outBlobNames.
          *  @param outBlobNames names for layers which outputs are needed to get
-          */
+         */
         CV_WRAP void forward(std::vector<std::vector<Mat> >& outputBlobs,
                              const std::vector<String>& outBlobNames);
 
@@ -414,21 +434,21 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
          * specific target. For layers that not represented in scheduling file
          * or if no manual scheduling used at all, automatic scheduling will be applied.
          */
-        void setHalideScheduler(const String& scheduler);
+        CV_WRAP void setHalideScheduler(const String& scheduler);
 
         /**
          * @brief Ask network to use specific computation backend where it supported.
          * @param[in] backendId backend identifier.
          * @see Backend
          */
-        void setPreferableBackend(int backendId);
+        CV_WRAP void setPreferableBackend(int backendId);
 
         /**
          * @brief Ask network to make computations on specific target device.
          * @param[in] targetId target identifier.
          * @see Target
          */
-        void setPreferableTarget(int targetId);
+        CV_WRAP void setPreferableTarget(int targetId);
 
         /** @brief Sets the new value for the layer output blob
          *  @param name descriptor of the updating layer output blob.
@@ -460,126 +480,146 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
          */
         CV_WRAP std::vector<int> getUnconnectedOutLayers() const;
         /** @brief Returns input and output shapes for all layers in loaded model;
-          *  preliminary inferencing isn't necessary.
-          *  @param netInputShapes shapes for all input blobs in net input layer.
-          *  @param layersIds output parameter for layer IDs.
-          *  @param inLayersShapes output parameter for input layers shapes;
-          * order is the same as in layersIds
-          *  @param outLayersShapes output parameter for output layers shapes;
-          * order is the same as in layersIds
-          */
-         CV_WRAP void getLayersShapes(const std::vector<MatShape>& netInputShapes,
-                                      std::vector<int>* layersIds,
-                                      std::vector<std::vector<MatShape> >* inLayersShapes,
-                                      std::vector<std::vector<MatShape> >* outLayersShapes) const;
+         *  preliminary inferencing isn't necessary.
+         *  @param netInputShapes shapes for all input blobs in net input layer.
+         *  @param layersIds output parameter for layer IDs.
+         *  @param inLayersShapes output parameter for input layers shapes;
+         * order is the same as in layersIds
+         *  @param outLayersShapes output parameter for output layers shapes;
+         * order is the same as in layersIds
+         */
+        CV_WRAP void getLayersShapes(const std::vector<MatShape>& netInputShapes,
+                                     CV_OUT std::vector<int>& layersIds,
+                                     CV_OUT std::vector<std::vector<MatShape> >& inLayersShapes,
+                                     CV_OUT std::vector<std::vector<MatShape> >& outLayersShapes) const;
 
-         /** @overload */
-         CV_WRAP void getLayersShapes(const MatShape& netInputShape,
-                                      std::vector<int>* layersIds,
-                                      std::vector<std::vector<MatShape> >* inLayersShapes,
-                                      std::vector<std::vector<MatShape> >* outLayersShapes) const;
+        /** @overload */
+        CV_WRAP void getLayersShapes(const MatShape& netInputShape,
+                                     CV_OUT std::vector<int>& layersIds,
+                                     CV_OUT std::vector<std::vector<MatShape> >& inLayersShapes,
+                                     CV_OUT std::vector<std::vector<MatShape> >& outLayersShapes) const;
 
-         /** @brief Returns input and output shapes for layer with specified
-          * id in loaded model; preliminary inferencing isn't necessary.
-          *  @param netInputShape shape input blob in net input layer.
-          *  @param layerId id for layer.
-          *  @param inLayerShapes output parameter for input layers shapes;
-          * order is the same as in layersIds
-          *  @param outLayerShapes output parameter for output layers shapes;
-          * order is the same as in layersIds
-          */
-         CV_WRAP void getLayerShapes(const MatShape& netInputShape,
-                                     const int layerId,
-                                     std::vector<MatShape>* inLayerShapes,
-                                     std::vector<MatShape>* outLayerShapes) const;
+        /** @brief Returns input and output shapes for layer with specified
+         * id in loaded model; preliminary inferencing isn't necessary.
+         *  @param netInputShape shape input blob in net input layer.
+         *  @param layerId id for layer.
+         *  @param inLayerShapes output parameter for input layers shapes;
+         * order is the same as in layersIds
+         *  @param outLayerShapes output parameter for output layers shapes;
+         * order is the same as in layersIds
+         */
+        void getLayerShapes(const MatShape& netInputShape,
+                                    const int layerId,
+                                    CV_OUT std::vector<MatShape>& inLayerShapes,
+                                    CV_OUT std::vector<MatShape>& outLayerShapes) const; // FIXIT: CV_WRAP
 
-         /** @overload */
-         CV_WRAP void getLayerShapes(const std::vector<MatShape>& netInputShapes,
-                                     const int layerId,
-                                     std::vector<MatShape>* inLayerShapes,
-                                     std::vector<MatShape>* outLayerShapes) const;
-         /** @brief Computes FLOP for whole loaded model with specified input shapes.
-          * @param netInputShapes vector of shapes for all net inputs.
-          * @returns computed FLOP.
-          */
-         CV_WRAP int64 getFLOPS(const std::vector<MatShape>& netInputShapes) const;
-         /** @overload */
-         CV_WRAP int64 getFLOPS(const MatShape& netInputShape) const;
-         /** @overload */
-         CV_WRAP int64 getFLOPS(const int layerId,
+        /** @overload */
+        void getLayerShapes(const std::vector<MatShape>& netInputShapes,
+                                    const int layerId,
+                                    CV_OUT std::vector<MatShape>& inLayerShapes,
+                                    CV_OUT std::vector<MatShape>& outLayerShapes) const; // FIXIT: CV_WRAP
+
+        /** @brief Computes FLOP for whole loaded model with specified input shapes.
+         * @param netInputShapes vector of shapes for all net inputs.
+         * @returns computed FLOP.
+         */
+        CV_WRAP int64 getFLOPS(const std::vector<MatShape>& netInputShapes) const;
+        /** @overload */
+        CV_WRAP int64 getFLOPS(const MatShape& netInputShape) const;
+        /** @overload */
+        CV_WRAP int64 getFLOPS(const int layerId,
                                const std::vector<MatShape>& netInputShapes) const;
-         /** @overload */
-         CV_WRAP int64 getFLOPS(const int layerId,
+        /** @overload */
+        CV_WRAP int64 getFLOPS(const int layerId,
                                const MatShape& netInputShape) const;
 
-         /** @brief Returns list of types for layer used in model.
-          * @param layersTypes output parameter for returning types.
-          */
-         CV_WRAP void getLayerTypes(CV_OUT std::vector<String>& layersTypes) const;
+        /** @brief Returns list of types for layer used in model.
+         * @param layersTypes output parameter for returning types.
+         */
+        CV_WRAP void getLayerTypes(CV_OUT std::vector<String>& layersTypes) const;
 
-         /** @brief Returns count of layers of specified type.
-          * @param layerType type.
-          * @returns count of layers
-          */
-         CV_WRAP int getLayersCount(const String& layerType) const;
+        /** @brief Returns count of layers of specified type.
+         * @param layerType type.
+         * @returns count of layers
+         */
+        CV_WRAP int getLayersCount(const String& layerType) const;
 
-         /** @brief Computes bytes number which are requered to store
-          * all weights and intermediate blobs for model.
-          * @param netInputShapes vector of shapes for all net inputs.
-          * @param weights output parameter to store resulting bytes for weights.
-          * @param blobs output parameter to store resulting bytes for intermediate blobs.
-          */
-         CV_WRAP void getMemoryConsumption(const std::vector<MatShape>& netInputShapes,
-                                           CV_OUT size_t& weights, CV_OUT size_t& blobs) const;
-         /** @overload */
-         CV_WRAP void getMemoryConsumption(const MatShape& netInputShape,
-                                           CV_OUT size_t& weights, CV_OUT size_t& blobs) const;
-         /** @overload */
-         CV_WRAP void getMemoryConsumption(const int layerId,
-                                           const std::vector<MatShape>& netInputShapes,
-                                           CV_OUT size_t& weights, CV_OUT size_t& blobs) const;
-         /** @overload */
-         CV_WRAP void getMemoryConsumption(const int layerId,
-                                           const MatShape& netInputShape,
-                                           CV_OUT size_t& weights, CV_OUT size_t& blobs) const;
+        /** @brief Computes bytes number which are requered to store
+         * all weights and intermediate blobs for model.
+         * @param netInputShapes vector of shapes for all net inputs.
+         * @param weights output parameter to store resulting bytes for weights.
+         * @param blobs output parameter to store resulting bytes for intermediate blobs.
+         */
+        void getMemoryConsumption(const std::vector<MatShape>& netInputShapes,
+                                          CV_OUT size_t& weights, CV_OUT size_t& blobs) const; // FIXIT: CV_WRAP
+        /** @overload */
+        CV_WRAP void getMemoryConsumption(const MatShape& netInputShape,
+                                          CV_OUT size_t& weights, CV_OUT size_t& blobs) const;
+        /** @overload */
+        CV_WRAP void getMemoryConsumption(const int layerId,
+                                          const std::vector<MatShape>& netInputShapes,
+                                          CV_OUT size_t& weights, CV_OUT size_t& blobs) const;
+        /** @overload */
+        CV_WRAP void getMemoryConsumption(const int layerId,
+                                          const MatShape& netInputShape,
+                                          CV_OUT size_t& weights, CV_OUT size_t& blobs) const;
 
-         /** @brief Computes bytes number which are requered to store
-          * all weights and intermediate blobs for each layer.
-          * @param netInputShapes vector of shapes for all net inputs.
-          * @param layerIds output vector to save layer IDs.
-          * @param weights output parameter to store resulting bytes for weights.
-          * @param blobs output parameter to store resulting bytes for intermediate blobs.
-          */
-         CV_WRAP void getMemoryConsumption(const std::vector<MatShape>& netInputShapes,
-                                           CV_OUT std::vector<int>& layerIds, CV_OUT std::vector<size_t>& weights,
-                                           CV_OUT std::vector<size_t>& blobs) const;
-         /** @overload */
-         CV_WRAP void getMemoryConsumption(const MatShape& netInputShape,
-                                           CV_OUT std::vector<int>& layerIds, CV_OUT std::vector<size_t>& weights,
-                                           CV_OUT std::vector<size_t>& blobs) const;
+        /** @brief Computes bytes number which are requered to store
+         * all weights and intermediate blobs for each layer.
+         * @param netInputShapes vector of shapes for all net inputs.
+         * @param layerIds output vector to save layer IDs.
+         * @param weights output parameter to store resulting bytes for weights.
+         * @param blobs output parameter to store resulting bytes for intermediate blobs.
+         */
+        void getMemoryConsumption(const std::vector<MatShape>& netInputShapes,
+                                          CV_OUT std::vector<int>& layerIds,
+                                          CV_OUT std::vector<size_t>& weights,
+                                          CV_OUT std::vector<size_t>& blobs) const; // FIXIT: CV_WRAP
+        /** @overload */
+        void getMemoryConsumption(const MatShape& netInputShape,
+                                          CV_OUT std::vector<int>& layerIds,
+                                          CV_OUT std::vector<size_t>& weights,
+                                          CV_OUT std::vector<size_t>& blobs) const; // FIXIT: CV_WRAP
+
+        /** @brief Enables or disables layer fusion in the network.
+         * @param fusion true to enable the fusion, false to disable. The fusion is enabled by default.
+         */
+        CV_WRAP void enableFusion(bool fusion);
+
+        /** @brief Returns overall time for inference and timings (in ticks) for layers.
+         * Indexes in returned vector correspond to layers ids. Some layers can be fused with others,
+         * in this case zero ticks count will be return for that skipped layers.
+         * @param timings vector for tick timings for all layers.
+         * @return overall ticks for model inference.
+         */
+        CV_WRAP int64 getPerfProfile(CV_OUT std::vector<double>& timings);
+
     private:
-
         struct Impl;
         Ptr<Impl> impl;
     };
 
-    /** @brief Small interface class for loading trained serialized models of different dnn-frameworks. */
+    /**
+     * @deprecated Deprecated as external interface. Will be for internal needs only.
+     * @brief Small interface class for loading trained serialized models of different dnn-frameworks. */
     class CV_EXPORTS_W Importer : public Algorithm
     {
     public:
 
         /** @brief Adds loaded layers into the @p net and sets connections between them. */
-        CV_WRAP virtual void populateNet(Net net) = 0;
+        CV_DEPRECATED CV_WRAP virtual void populateNet(Net net) = 0;
 
         virtual ~Importer();
     };
 
-    /** @brief Creates the importer of <a href="http://caffe.berkeleyvision.org">Caffe</a> framework network.
+    /**
+     *  @deprecated Use @ref readNetFromCaffe instead.
+     *  @brief Creates the importer of <a href="http://caffe.berkeleyvision.org">Caffe</a> framework network.
      *  @param prototxt   path to the .prototxt file with text description of the network architecture.
      *  @param caffeModel path to the .caffemodel file with learned network.
      *  @returns Pointer to the created importer, NULL in failure cases.
      */
-    CV_EXPORTS_W Ptr<Importer> createCaffeImporter(const String &prototxt, const String &caffeModel = String());
+    CV_DEPRECATED CV_EXPORTS_W Ptr<Importer> createCaffeImporter(const String &prototxt, const String &caffeModel = String());
 
     /** @brief Reads a network model stored in Caffe model files.
       * @details This is shortcut consisting from createCaffeImporter and Net::populateNet calls.
@@ -596,13 +636,17 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
       */
     CV_EXPORTS_W Net readNetFromTorch(const String &model, bool isBinary = true);
 
-    /** @brief Creates the importer of <a href="http://www.tensorflow.org">TensorFlow</a> framework network.
+    /**
+     *  @deprecated Use @ref readNetFromTensorflow instead.
+     *  @brief Creates the importer of <a href="http://www.tensorflow.org">TensorFlow</a> framework network.
      *  @param model   path to the .pb file with binary protobuf description of the network architecture.
      *  @returns Pointer to the created importer, NULL in failure cases.
      */
-    CV_EXPORTS_W Ptr<Importer> createTensorflowImporter(const String &model);
+    CV_DEPRECATED CV_EXPORTS_W Ptr<Importer> createTensorflowImporter(const String &model);
 
-    /** @brief Creates the importer of <a href="http://torch.ch">Torch7</a> framework network.
+    /**
+     *  @deprecated Use @ref readNetFromTorch instead.
+     *  @brief Creates the importer of <a href="http://torch.ch">Torch7</a> framework network.
      *  @param filename path to the file, dumped from Torch by using torch.save() function.
      *  @param isBinary specifies whether the network was serialized in ascii mode or binary.
      *  @returns Pointer to the created importer, NULL in failure cases.
@@ -628,7 +672,7 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
      *
      * Also some equivalents of these classes from cunn, cudnn, and fbcunn may be successfully imported.
      */
-    CV_EXPORTS_W Ptr<Importer> createTorchImporter(const String &filename, bool isBinary = true);
+    CV_DEPRECATED CV_EXPORTS_W Ptr<Importer> createTorchImporter(const String &filename, bool isBinary = true);
 
     /** @brief Loads blob which was serialized as torch.Tensor object of Torch7 framework.
      *  @warning This function has the same limitations as createTorchImporter().
@@ -665,6 +709,19 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
      */
     CV_EXPORTS_W Mat blobFromImages(const std::vector<Mat>& images, double scalefactor=1.0,
                                     Size size = Size(), const Scalar& mean = Scalar(), bool swapRB=true);
+
+    /** @brief Convert all weights of Caffe network to half precision floating point.
+     * @param src Path to origin model from Caffe framework contains single
+     *            precision floating point weights (usually has `.caffemodel` extension).
+     * @param dst Path to destination model with updated weights.
+     *
+     * @note Shrinked model has no origin float32 weights so it can't be used
+     *       in origin Caffe framework anymore. However the structure of data
+     *       is taken from NVidia's Caffe fork: https://github.com/NVIDIA/caffe.
+     *       So the resulting model may be used there.
+     */
+    CV_EXPORTS_W void shrinkCaffeModel(const String& src, const String& dst);
+
 
 //! @}
 CV__DNN_EXPERIMENTAL_NS_END

@@ -35,6 +35,28 @@ static void test(LayerParams& params, Mat& input)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+// Padding
+////////////////////////////////////////////////////////////////////////////////
+TEST(Padding_Halide, Accuracy)
+{
+    static const int kNumRuns = 10;
+    std::vector<int> paddings(8);
+    for (int t = 0; t < kNumRuns; ++t)
+    {
+        for (int i = 0; i < paddings.size(); ++i)
+            paddings[i] = rand() % 5;
+
+        LayerParams lp;
+        lp.set("paddings", DictValue::arrayInt<int*>(&paddings[0], paddings.size()));
+        lp.type = "Padding";
+        lp.name = "testLayer";
+
+        Mat input({1 + rand() % 10, 1 + rand() % 10, 1 + rand() % 10, 1 + rand() % 10}, CV_32F);
+        test(lp, input);
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // Convolution
 ////////////////////////////////////////////////////////////////////////////////
 typedef TestWithParam<tuple<Vec3i, Size, Size, Size, Size, Size, bool> > Convolution;
@@ -107,7 +129,7 @@ TEST_P(Deconvolution, Accuracy)
     Size adjPad = Size(get<5>(GetParam())[2], get<5>(GetParam())[3]);
     bool hasBias = get<6>(GetParam());
 
-    Mat weights({outChannels, inChannels / group, kernel.height, kernel.width}, CV_32F);
+    Mat weights({inChannels, outChannels / group, kernel.height, kernel.width}, CV_32F);
     randu(weights, -1.0f, 1.0f);
 
     LayerParams lp;
@@ -139,7 +161,7 @@ TEST_P(Deconvolution, Accuracy)
 
 INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, Deconvolution, Combine(
 /*in channels, out channels, group*/
-             Values(Vec3i(6, 4, 1), Vec3i(6, 9, 1)),
+             Values(Vec3i(6, 4, 1), Vec3i(6, 9, 3)),
 /*in size*/  Values(Size(5, 6)),
 /*kernel*/   Values(Size(3, 1), Size(1, 3)),
 /*pad*/      Values(Size(1, 0), Size(0, 1)),
@@ -517,7 +539,8 @@ TEST_P(Concat, Accuracy)
 
     Net net;
 
-    std::vector<int> convLayerIds(numChannels.channels);
+    std::vector<int> convLayerIds;
+    convLayerIds.reserve(numChannels.channels);
     for (int i = 0, n = numChannels.channels; i < n; ++i)
     {
         if (!numChannels[i])
@@ -537,8 +560,9 @@ TEST_P(Concat, Accuracy)
         convParam.name = ss.str();
         convParam.blobs.push_back(weights);
 
-        convLayerIds[i] = net.addLayer(convParam.name, convParam.type, convParam);
-        net.connect(0, 0, convLayerIds[i], 0);
+        int layerId = net.addLayer(convParam.name, convParam.type, convParam);
+        convLayerIds.push_back(layerId);
+        net.connect(0, 0, layerId, 0);
     }
 
     LayerParams concatParam;
@@ -575,12 +599,13 @@ INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, Concat, Combine(
 //      `--- conv ----^ ^ ^
 //      `---- ... ------' '
 //      `-----------------'
-typedef TestWithParam<tuple<Vec3i, std::string, int> > Eltwise;
+typedef TestWithParam<tuple<Vec3i, std::string, int, bool> > Eltwise;
 TEST_P(Eltwise, Accuracy)
 {
     Vec3i inSize = get<0>(GetParam());
     std::string op = get<1>(GetParam());
     int numConv = get<2>(GetParam());
+    bool weighted = get<3>(GetParam());
 
     Net net;
 
@@ -606,6 +631,17 @@ TEST_P(Eltwise, Accuracy)
     }
 
     LayerParams eltwiseParam;
+    eltwiseParam.set("operation", op);
+    if (op == "sum" && weighted)
+    {
+        RNG rng = cv::theRNG();
+        std::vector<float> coeff(1 + numConv);
+        for (int i = 0; i < coeff.size(); ++i)
+        {
+            coeff[i] = rng.uniform(-2.0f, 2.0f);
+        }
+        eltwiseParam.set("coeff", DictValue::arrayReal<float*>(&coeff[0], coeff.size()));
+    }
     eltwiseParam.type = "Eltwise";
     eltwiseParam.name = "testLayer";
     int eltwiseId = net.addLayer(eltwiseParam.name, eltwiseParam.type, eltwiseParam);
@@ -629,8 +665,51 @@ TEST_P(Eltwise, Accuracy)
 INSTANTIATE_TEST_CASE_P(Layer_Test_Halide, Eltwise, Combine(
 /*input size*/ Values(Vec3i(1, 4, 5), Vec3i(2, 8, 6)),
 /*operation*/  Values("prod", "sum", "max"),
-/*num convs*/  Values(1, 2, 3)
+/*num convs*/  Values(1, 2, 3),
+/*weighted(for sum only)*/ Bool()
 ));
+
+////////////////////////////////////////////////////////////////////////////
+// Mixed backends
+////////////////////////////////////////////////////////////////////////////
+TEST(MixedBackends_Halide_Default_Halide, Accuracy)
+{
+    // Just a layer that supports Halide backend.
+    LayerParams lrn;
+    lrn.type = "LRN";
+    lrn.name = "testLRN";
+
+    // Some of layers that doesn't supports Halide backend yet.
+    LayerParams mvn;
+    mvn.type = "MVN";
+    mvn.name = "testMVN";
+
+    // Halide layer again.
+    LayerParams lrn2;
+    lrn2.type = "LRN";
+    lrn2.name = "testLRN2";
+
+    Net net;
+    int lrnId = net.addLayer(lrn.name, lrn.type, lrn);
+    net.connect(0, 0, lrnId, 0);
+    net.addLayerToPrev(mvn.name, mvn.type, mvn);
+    net.addLayerToPrev(lrn2.name, lrn2.type, lrn2);
+
+    Mat input({4, 3, 5, 6}, CV_32F);
+    randu(input, -1.0f, 1.0f);
+    net.setInput(input);
+    Mat outputDefault = net.forward().clone();
+
+    net.setPreferableBackend(DNN_BACKEND_HALIDE);
+    net.setInput(input);
+    Mat outputHalide = net.forward().clone();
+    normAssert(outputDefault, outputHalide);
+
+    net.setPreferableTarget(DNN_TARGET_OPENCL);
+    net.setInput(input);
+    outputHalide = net.forward().clone();
+    normAssert(outputDefault, outputHalide);
+}
 #endif  // HAVE_HALIDE
 
 }  // namespace cvtest

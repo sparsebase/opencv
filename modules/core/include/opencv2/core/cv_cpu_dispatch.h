@@ -86,7 +86,7 @@
 #  define CV_FMA3 1
 #endif
 
-#if (defined WIN32 || defined _WIN32) && defined(_M_ARM)
+#if defined _WIN32 && defined(_M_ARM)
 # include <Intrin.h>
 # include <arm_neon.h>
 # define CV_NEON 1
@@ -108,21 +108,27 @@ struct VZeroUpperGuard {
 #endif
     inline ~VZeroUpperGuard() { _mm256_zeroupper(); }
 };
-#define __CV_AVX_GUARD VZeroUpperGuard __vzeroupper_guard;
+#define __CV_AVX_GUARD VZeroUpperGuard __vzeroupper_guard; (void)__vzeroupper_guard;
+#endif
+
+#ifdef __CV_AVX_GUARD
+#define CV_AVX_GUARD __CV_AVX_GUARD
+#else
+#define CV_AVX_GUARD
 #endif
 
 #endif // __OPENCV_BUILD
 
 
 
-#if !defined __OPENCV_BUILD // Compatibility code
-
+#if !defined __OPENCV_BUILD /* Compatibility code */ \
+    && !defined __CUDACC__ /* do not include SSE/AVX/NEON headers for NVCC compiler */
 #if defined __SSE2__ || defined _M_X64 || (defined _M_IX86_FP && _M_IX86_FP >= 2)
 #  include <emmintrin.h>
 #  define CV_MMX 1
 #  define CV_SSE 1
 #  define CV_SSE2 1
-#elif (defined WIN32 || defined _WIN32) && defined(_M_ARM)
+#elif defined _WIN32 && defined(_M_ARM)
 # include <Intrin.h>
 # include <arm_neon.h>
 # define CV_NEON 1
@@ -131,7 +137,7 @@ struct VZeroUpperGuard {
 #  define CV_NEON 1
 #endif
 
-#endif // !__OPENCV_BUILD (Compatibility code)
+#endif // !__OPENCV_BUILD && !__CUDACC (Compatibility code)
 
 
 

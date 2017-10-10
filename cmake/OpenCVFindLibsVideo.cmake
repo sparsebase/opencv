@@ -89,23 +89,16 @@ if(WITH_PVAPI)
       set(PVAPI_SDK_SUBDIR arm)
     endif()
 
-    get_filename_component(_PVAPI_LIBRARY "${PVAPI_INCLUDE_PATH}/../lib-pc" ABSOLUTE)
-    if(PVAPI_SDK_SUBDIR)
-      set(_PVAPI_LIBRARY "${_PVAPI_LIBRARY}/${PVAPI_SDK_SUBDIR}")
-    endif()
-    if(NOT WIN32 AND CMAKE_COMPILER_IS_GNUCXX)
-      set(_PVAPI_LIBRARY "${_PVAPI_LIBRARY}/${CMAKE_OPENCV_GCC_VERSION_MAJOR}.${CMAKE_OPENCV_GCC_VERSION_MINOR}")
-    endif()
+    get_filename_component(_PVAPI_LIBRARY_HINT "${PVAPI_INCLUDE_PATH}/../lib-pc" ABSOLUTE)
 
-    if(WIN32)
-      if(MINGW)
-        set(PVAPI_DEFINITIONS "-DPVDECL=__stdcall")
-      endif(MINGW)
-      set(PVAPI_LIBRARY "${_PVAPI_LIBRARY}/PvAPI.lib" CACHE PATH "The PvAPI library")
-    else(WIN32)
-      set(PVAPI_LIBRARY "${_PVAPI_LIBRARY}/${CMAKE_STATIC_LIBRARY_PREFIX}PvAPI${CMAKE_STATIC_LIBRARY_SUFFIX}" CACHE PATH "The PvAPI library")
-    endif(WIN32)
-    if(EXISTS "${PVAPI_LIBRARY}")
+    find_library(PVAPI_LIBRARY NAMES "PvAPI" PATHS "${_PVAPI_LIBRARY_HINT}")
+
+    if(PVAPI_LIBRARY)
+      if(WIN32)
+        if(MINGW)
+          set(PVAPI_DEFINITIONS "-DPVDECL=__stdcall")
+        endif(MINGW)
+      endif()
       set(HAVE_PVAPI TRUE)
     endif()
   endif(PVAPI_INCLUDE_PATH)
@@ -127,13 +120,18 @@ endif(WITH_GIGEAPI)
 # --- Aravis SDK ---
 ocv_clear_vars(HAVE_ARAVIS_API)
 if(WITH_ARAVIS)
-  find_path(ARAVIS_INCLUDE_PATH "arv.h"
-            PATHS /usr/local /var /opt /usr ENV ProgramFiles ENV ProgramW6432
-            PATH_SUFFIXES include "aravis-0.6" "aravis-0.4"
-            DOC "The path to Aravis SDK headers")
-  find_library(ARAVIS_LIBRARIES NAMES "aravis-0.6" "aravis-0.4" )
-  if(ARAVIS_LIBRARIES AND ARAVIS_INCLUDE_PATH)
-    set(HAVE_ARAVIS_API TRUE)
+  check_module(glib-2.0 HAVE_ARAVIS_GLIB VIDEOIO)
+  if(HAVE_ARAVIS_GLIB)
+    find_path(ARAVIS_INCLUDE_PATH "arv.h"
+              PATHS /usr/local /var /opt /usr ENV ProgramFiles ENV ProgramW6432
+              PATH_SUFFIXES include "aravis-0.6" "aravis-0.4"
+              DOC "The path to Aravis SDK headers")
+    find_library(ARAVIS_LIBRARIES NAMES "aravis-0.6" "aravis-0.4" )
+    if(ARAVIS_LIBRARIES AND ARAVIS_INCLUDE_PATH)
+      set(HAVE_ARAVIS_API TRUE)
+    endif()
+  else()
+    message("Can not build Aravis support without glib2")
   endif()
 endif(WITH_ARAVIS)
 
@@ -252,8 +250,11 @@ endif(WITH_FFMPEG)
 
 # --- VideoInput/DirectShow ---
 if(WITH_DSHOW)
-  # always have VideoInput on Windows
-  set(HAVE_DSHOW 1)
+  if(MSVC_VERSION GREATER 1499)
+    set(HAVE_DSHOW 1)
+  elseif(NOT HAVE_DSHOW)
+    check_include_file(DShow.h HAVE_DSHOW)
+  endif()
 endif(WITH_DSHOW)
 
 # --- VideoInput/Microsoft Media Foundation ---

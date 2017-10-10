@@ -62,6 +62,7 @@ static void test(const std::string& weights, const std::string& proto,
     netHalide.setInput(blobFromImage(input.clone(), 1.0, Size(), Scalar(), false));
 
     normAssert(outputDefault, outputHalide, "Second run", l1, lInf);
+    std::cout << "." << std::endl;
 
     // Swap backends.
     netHalide.setPreferableBackend(DNN_BACKEND_DEFAULT);
@@ -79,11 +80,26 @@ static void test(const std::string& weights, const std::string& proto,
 ////////////////////////////////////////////////////////////////////////////////
 // CPU target
 ////////////////////////////////////////////////////////////////////////////////
+TEST(Reproducibility_MobileNetSSD_Halide, Accuracy)
+{
+    test(findDataFile("dnn/MobileNetSSD_deploy.caffemodel", false),
+         findDataFile("dnn/MobileNetSSD_deploy.prototxt", false),
+         "", 300, 300, "detection_out", "caffe", DNN_TARGET_CPU);
+};
+
+// TODO: Segmentation fault from time to time.
+// TEST(Reproducibility_SSD_Halide, Accuracy)
+// {
+//     test(findDataFile("dnn/VGG_ILSVRC2016_SSD_300x300_iter_440000.caffemodel", false),
+//          findDataFile("dnn/ssd_vgg16.prototxt", false),
+//          "", 300, 300, "detection_out", "caffe", DNN_TARGET_CPU);
+// };
+
 TEST(Reproducibility_GoogLeNet_Halide, Accuracy)
 {
     test(findDataFile("dnn/bvlc_googlenet.caffemodel", false),
          findDataFile("dnn/bvlc_googlenet.prototxt", false),
-         "", 227, 227, "prob", "caffe", DNN_TARGET_CPU);
+         "", 224, 224, "prob", "caffe", DNN_TARGET_CPU);
 };
 
 TEST(Reproducibility_AlexNet_Halide, Accuracy)
@@ -104,8 +120,8 @@ TEST(Reproducibility_ResNet_50_Halide, Accuracy)
 
 TEST(Reproducibility_SqueezeNet_v1_1_Halide, Accuracy)
 {
-    test(findDataFile("dnn/squeezenet_v1_1.caffemodel", false),
-         findDataFile("dnn/squeezenet_v1_1.prototxt", false),
+    test(findDataFile("dnn/squeezenet_v1.1.caffemodel", false),
+         findDataFile("dnn/squeezenet_v1.1.prototxt", false),
          findDataFile("dnn/halide_scheduler_squeezenet_v1_1.yml", false),
          227, 227, "prob", "caffe", DNN_TARGET_CPU);
 };
@@ -126,6 +142,20 @@ TEST(Reproducibility_ENet_Halide, Accuracy)
 ////////////////////////////////////////////////////////////////////////////////
 // OpenCL target
 ////////////////////////////////////////////////////////////////////////////////
+TEST(Reproducibility_MobileNetSSD_Halide_opencl, Accuracy)
+{
+    test(findDataFile("dnn/MobileNetSSD_deploy.caffemodel", false),
+         findDataFile("dnn/MobileNetSSD_deploy.prototxt", false),
+         "", 300, 300, "detection_out", "caffe", DNN_TARGET_OPENCL);
+};
+
+TEST(Reproducibility_SSD_Halide_opencl, Accuracy)
+{
+    test(findDataFile("dnn/VGG_ILSVRC2016_SSD_300x300_iter_440000.caffemodel", false),
+         findDataFile("dnn/ssd_vgg16.prototxt", false),
+         "", 300, 300, "detection_out", "caffe", DNN_TARGET_OPENCL);
+};
+
 TEST(Reproducibility_GoogLeNet_Halide_opencl, Accuracy)
 {
     test(findDataFile("dnn/bvlc_googlenet.caffemodel", false),
@@ -151,8 +181,8 @@ TEST(Reproducibility_ResNet_50_Halide_opencl, Accuracy)
 
 TEST(Reproducibility_SqueezeNet_v1_1_Halide_opencl, Accuracy)
 {
-    test(findDataFile("dnn/squeezenet_v1_1.caffemodel", false),
-         findDataFile("dnn/squeezenet_v1_1.prototxt", false),
+    test(findDataFile("dnn/squeezenet_v1.1.caffemodel", false),
+         findDataFile("dnn/squeezenet_v1.1.prototxt", false),
          findDataFile("dnn/halide_scheduler_opencl_squeezenet_v1_1.yml", false),
          227, 227, "prob", "caffe", DNN_TARGET_OPENCL);
 };

@@ -4,7 +4,7 @@
 #include <iostream>
 #include <fstream>
 
-#if defined WIN32 || defined _WIN32 || defined WIN64 || defined _WIN64
+#if defined _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -15,7 +15,7 @@
 #include "opencv2/core/cuda.hpp"
 #endif
 
-#ifdef ANDROID
+#ifdef __ANDROID__
 # include <sys/time.h>
 #endif
 
@@ -57,7 +57,7 @@ extern bool         test_ipp_check;
 static int          param_cuda_device;
 #endif
 
-#ifdef ANDROID
+#ifdef __ANDROID__
 static int          param_affinity_mask;
 static bool         log_power_checkpoints;
 
@@ -71,7 +71,7 @@ static void setCurrentThreadAffinityMask(int mask)
     if (syscallres)
     {
         int err=errno;
-        err=err;//to avoid warnings about unused variables
+        CV_UNUSED(err);
         LOGE("Error in the syscall setaffinity: mask=%d=0x%x err=%d=0x%x", mask, mask, err, err);
     }
 }
@@ -197,6 +197,10 @@ void Regression::init(const std::string& testSuitName, const std::string& ext)
 #else
     const char *data_path_dir = OPENCV_TEST_DATA_PATH;
 #endif
+
+    cvtest::addDataSearchSubDirectory("");
+    cvtest::addDataSearchSubDirectory(testSuitName);
+
     const char *path_separator = "/";
 
     if (data_path_dir)
@@ -973,7 +977,7 @@ void TestBase::Init(const std::vector<std::string> & availableImpls,
         "{   perf_strategy               |default  |specifies performance measuring strategy: default, base or simple (weak restrictions)}"
         "{   perf_read_validation_results |        |specifies file name with performance results from previous run}"
         "{   perf_write_validation_results |       |specifies file name to write performance validation results}"
-#ifdef ANDROID
+#ifdef __ANDROID__
         "{   perf_time_limit             |6.0      |default time limit for a single test (in seconds)}"
         "{   perf_affinity_mask          |0        |set affinity mask for the main thread}"
         "{   perf_log_power_checkpoints  |         |additional xml logging for power measurement}"
@@ -1044,7 +1048,7 @@ void TestBase::Init(const std::vector<std::string> & availableImpls,
 #ifdef ENABLE_INSTRUMENTATION
     param_instrument    = args.get<int>("perf_instrument");
 #endif
-#ifdef ANDROID
+#ifdef __ANDROID__
     param_affinity_mask   = args.get<int>("perf_affinity_mask");
     log_power_checkpoints = args.has("perf_log_power_checkpoints");
 #endif
@@ -1207,6 +1211,18 @@ int64 TestBase::_calibrate()
             for(declare.iterations(1000); next() && startTimer(); stopTimer()){}
         }
     };
+
+    // Initialize ThreadPool
+    class _dummyParallel : public ParallelLoopBody
+    {
+    public:
+       void operator()(const cv::Range& range) const
+       {
+           // nothing
+           CV_UNUSED(range);
+       }
+    };
+    parallel_for_(cv::Range(0, 1000), _dummyParallel());
 
     _timeadjustment = 0;
     _helper h;
@@ -1426,7 +1442,7 @@ bool TestBase::next()
                         CV_TRACE_REGION("idle_delay");
                         printf("Performance is unstable, it may be a result of overheat problems\n");
                         printf("Idle delay for %d ms... \n", perf_validation_idle_delay_ms);
-#if defined WIN32 || defined _WIN32 || defined WIN64 || defined _WIN64
+#if defined _WIN32
 #ifndef WINRT_8_0
                         Sleep(perf_validation_idle_delay_ms);
 #else
@@ -1461,7 +1477,7 @@ bool TestBase::next()
         }
     }
 
-#ifdef ANDROID
+#ifdef __ANDROID__
     if (log_power_checkpoints)
     {
         timeval tim;
@@ -1758,7 +1774,7 @@ void TestBase::reportMetrics(bool toJUnitXML)
         const char* type_param = test_info->type_param();
         const char* value_param = test_info->value_param();
 
-#if defined(ANDROID) && defined(USE_ANDROID_LOGGING)
+#if defined(__ANDROID__) && defined(USE_ANDROID_LOGGING)
         LOGD("[ FAILED   ] %s.%s", test_info->test_case_name(), test_info->name());
 #endif
 
@@ -1834,8 +1850,10 @@ void TestBase::SetUp()
 
     if (param_threads >= 0)
         cv::setNumThreads(param_threads);
+    else
+        cv::setNumThreads(-1);
 
-#ifdef ANDROID
+#ifdef __ANDROID__
     if (param_affinity_mask)
         setCurrentThreadAffinityMask(param_affinity_mask);
 #endif

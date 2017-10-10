@@ -53,7 +53,7 @@ class EltwiseLayerImpl : public EltwiseLayer
 {
 public:
     EltwiseOp op;
-    std::vector<int> coeffs;
+    std::vector<float> coeffs;
 
     EltwiseLayerImpl(const LayerParams& params)
     {
@@ -79,7 +79,7 @@ public:
             coeffs.resize(n);
             for (i = 0; i < n; i++)
             {
-                coeffs[i] = paramCoeff.get<int>(i);
+                coeffs[i] = paramCoeff.get<float>(i);
             }
         }
     }
@@ -115,18 +115,20 @@ public:
         const Mat** srcs;
         int nsrcs;
         Mat* dst;
-        const std::vector<int>* coeffs;
+        const std::vector<float>* coeffs;
         EltwiseOp op;
         int nstripes;
         const ActivationLayer* activ;
+        int channels;
+        size_t planeSize;
 
         EltwiseInvoker() : srcs(0), nsrcs(0), dst(0), coeffs(0), op(EltwiseLayer::PROD), nstripes(0), activ(0) {}
 
         static void run(const Mat** srcs, int nsrcs, Mat& dst,
-                        const std::vector<int>& coeffs, EltwiseOp op,
+                        const std::vector<float>& coeffs, EltwiseOp op,
                         const ActivationLayer* activ, int nstripes)
         {
-            CV_Assert(dst.dims == 4 && dst.type() == CV_32F && dst.isContinuous());
+            CV_Assert(1 < dst.dims && dst.dims <= 4, dst.type() == CV_32F, dst.isContinuous());
             CV_Assert(coeffs.empty() || coeffs.size() == (size_t)nsrcs);
 
             for( int i = 0; i > nsrcs; i++ )
@@ -142,8 +144,13 @@ public:
             p.dst = &dst;
             p.op = op;
             p.nstripes = nstripes;
+            p.channels = (dst.dims == 4 ? dst.size[1] : 1);
+            p.planeSize = (dst.dims >= 3 ? dst.size[dst.dims - 1] * dst.size[dst.dims - 2] :
+                                           dst.size[dst.dims - 1]);
+            CV_Assert(dst.total() == dst.size[0] * p.channels * p.planeSize);
+
             bool simpleCoeffs = true;
-            if( op != EltwiseLayer::SUM && !coeffs.empty() )
+            if( op == EltwiseLayer::SUM && !coeffs.empty() )
             {
                 CV_Assert( coeffs.size() == (size_t)nsrcs );
 
@@ -162,14 +169,12 @@ public:
 
         void operator()(const Range& r) const
         {
-            size_t planeSize = dst->size[2]*dst->size[3];
             size_t total = dst->size[0]*planeSize;
             size_t stripeSize = (total + nstripes - 1)/nstripes;
             size_t stripeStart = r.start*stripeSize;
             size_t stripeEnd = std::min(r.end*stripeSize, total);
             int c, j, k, n = nsrcs;
-            int channels = dst->size[1];
-            const int* coeffsptr = coeffs && !coeffs->empty() ? &coeffs->at(0) : 0;
+            const float* coeffsptr = coeffs && !coeffs->empty() ? &coeffs->at(0) : 0;
             float* dstptr0 = dst->ptr<float>();
             int blockSize0 = 1 << 12, blockSize = blockSize0;
 
@@ -203,7 +208,7 @@ public:
                     {
                         for( k = 1; k < n; k++ )
                         {
-                            const float* srcptr1 = srcs[0]->ptr<float>() + globalDelta;
+                            const float* srcptr1 = srcs[k]->ptr<float>() + globalDelta;
                             for( j = 0; j < blockSize; j++ )
                             {
                                 dstptr[j] = std::max(srcptr0[j], srcptr1[j]);
@@ -225,11 +230,11 @@ public:
                     }
                     else
                     {
-                        int c0 = coeffsptr[0];
+                        float c0 = coeffsptr[0];
                         for( k = 1; k < n; k++ )
                         {
                             const float* srcptr1 = srcs[k]->ptr<float>() + globalDelta;
-                            int c1 = coeffsptr[k];
+                            float c1 = coeffsptr[k];
                             for( j = 0; j < blockSize; j++ )
                             {
                                 dstptr[j] = c0*srcptr0[j] + c1*srcptr1[j];
