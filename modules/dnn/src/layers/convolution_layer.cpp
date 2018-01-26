@@ -46,6 +46,7 @@
 #include "opencv2/core/hal/hal.hpp"
 #include "opencv2/core/hal/intrin.hpp"
 #include <iostream>
+#include "opencl_kernels_dnn.hpp"
 
 #ifdef HAVE_OPENCL
 using namespace cv::dnn::ocl4dnn;
@@ -142,6 +143,9 @@ public:
     }
 };
 
+
+#define IS_POWER_LAYER(layer) \
+            (!layer.empty() && !layer->type.compare("Power"))
 //TODO: simultaneously convolution and bias addition for cache optimization
 class ConvolutionLayerImpl : public BaseConvolutionLayerImpl
 {
@@ -157,7 +161,22 @@ public:
 #ifdef HAVE_OPENCL
     Ptr<OCL4DNNConvSpatial<float> > convolutionOp;
     std::vector<UMat> umat_blobs;
+    bool fusedBias;
+    bool newWeightAndBias;
+    bool newActiv;
+    ocl4dnnFusedActiv_t activType;
+    float power;
 #endif
+    ConvolutionLayerImpl()
+    {
+#ifdef HAVE_OPENCL
+        fusedBias = false;
+        newWeightAndBias = false;
+        newActiv = false;
+        activType = OCL4DNN_CONV_FUSED_ACTIV_NONE;
+        power = 0.f;
+#endif
+    }
 
     MatShape computeColRowShape(const MatShape &inpShape, const MatShape &outShape) const
     {
@@ -209,6 +228,31 @@ public:
         activ = layer;
         if (activ.empty())
             reluslope.clear();
+#ifdef HAVE_OPENCL
+        newActiv = true;
+        activType = OCL4DNN_CONV_FUSED_ACTIV_NONE;
+
+        if (preferableTarget == DNN_TARGET_OPENCL)
+        {
+            Ptr<PowerLayer> activ_power = activ.dynamicCast<PowerLayer>();
+            if (!activ_power.empty())
+            {
+                if (activ_power->scale != 1.f || activ_power->shift != 0.f)
+                    newWeightAndBias = true;
+
+                if (activ_power->scale != 1.f)
+                    weightsMat.release();
+
+                power = activ_power->power;
+                activType = OCL4DNN_CONV_FUSED_ACTIV_POWER;
+            }
+            Ptr<TanHLayer> activ_tanh = activ.dynamicCast<TanHLayer>();
+            if (!activ_tanh.empty())
+            {
+                activType = OCL4DNN_CONV_FUSED_ACTIV_TANH;
+            }
+        }
+#endif
         return !activ.empty();
     }
 
@@ -221,16 +265,26 @@ public:
         // we will need to re-compute the weights with the batch
         // norm coefficients taken into account
         weightsMat.release();
+#ifdef HAVE_OPENCL
+        newWeightAndBias = true;
+        fusedBias = false;
+#endif
         return !bnorm.empty();
     }
 
     bool setScale(const Ptr<ScaleLayer>& layer)
     {
+        if (layer.empty() || layer->blobs.empty())
+            return false;
         scaleLayer = layer;
         // we will need to re-compute the weights with the scaling
         // coefficients taken into account
         weightsMat.release();
-        return !scaleLayer.empty();
+#ifdef HAVE_OPENCL
+        newWeightAndBias = true;
+        fusedBias = false;
+#endif
+        return true;
     }
 
     virtual Ptr<BackendNode> initHalide(const std::vector<Ptr<BackendWrapper> > &inputs)
@@ -299,10 +353,11 @@ public:
         bool is1x1_;
         bool useAVX;
         bool useAVX2;
+        bool useAVX512;
 
         ParallelConv()
             : input_(0), weights_(0), output_(0), ngroups_(0), nstripes_(0),
-              biasvec_(0), reluslope_(0), activ_(0), is1x1_(false), useAVX(false), useAVX2(false)
+              biasvec_(0), reluslope_(0), activ_(0), is1x1_(false), useAVX(false), useAVX2(false), useAVX512(false)
         {}
 
         static void run( const Mat& input, Mat& output, const Mat& weights,
@@ -337,6 +392,7 @@ public:
             p.is1x1_ = kernel == Size(0,0) && pad == Size(0, 0);
             p.useAVX = checkHardwareSupport(CPU_AVX);
             p.useAVX2 = checkHardwareSupport(CPU_AVX2);
+            p.useAVX512 = CV_CPU_HAS_SUPPORT_AVX512_SKX;
 
             int ncn = std::min(inpCn, (int)BLK_SIZE_CN);
             p.ofstab_.resize(kernel.width*kernel.height*ncn);
@@ -516,6 +572,13 @@ public:
                         // now compute dot product of the weights
                         // and im2row-transformed part of the tensor
                         int bsz = ofs1 - ofs0;
+                    #if CV_TRY_AVX512_SKX
+                        /* AVX512 convolution requires an alignment of 16, and ROI is only there for larger vector sizes */
+                        if(useAVX512)
+                            opt_AVX512_SKX::fastConv(wptr, wstep, biasptr, rowbuf0, data_out0 + ofs0,
+                                          outShape, bsz, vsz, vsz_a, relu, cn0 == 0);
+                        else
+                    #endif
                     #if CV_TRY_AVX2
                         if(useAVX2)
                             opt_AVX2::fastConv(wptr, wstep, biasptr, rowbuf0, data_out0 + ofs0,
@@ -646,14 +709,24 @@ public:
     };
 
 #ifdef HAVE_OPENCL
-    bool forward_ocl(std::vector<Mat*> &inputs, std::vector<Mat> &outputs, std::vector<Mat> &internals)
+    bool forward_ocl(InputArrayOfArrays inps, OutputArrayOfArrays outs, OutputArrayOfArrays internals)
     {
-        int group = inputs[0]->size[1] / umat_blobs[0].size[1];
+        std::vector<UMat> inputs;
+        std::vector<UMat> outputs;
+
+        inps.getUMatVector(inputs);
+        outs.getUMatVector(outputs);
+
+        CV_Assert(outputs.size() == 1);
+        for (int i = 0; i < inputs.size(); ++i)
+            CV_Assert(inputs[i].u != outputs[0].u);
+
+        int group = inputs[0].size[1] / umat_blobs[0].size[1];
 
         if (convolutionOp.empty())
         {
             OCL4DNNConvConfig config;
-            config.in_shape = shape(*inputs[0]);
+            config.in_shape = shape(inputs[0]);
             config.out_shape = shape(outputs[0]);
             config.kernel = kernel;
             config.pad = pad;
@@ -665,21 +738,188 @@ public:
             convolutionOp = Ptr<OCL4DNNConvSpatial<float> >(new OCL4DNNConvSpatial<float>(config));
         }
 
-        for (size_t ii = 0; ii < outputs.size(); ii++)
+        int k, outCn = umat_blobs[0].size[0];
+        if( weightsMat.empty() )
         {
-            UMat inpMat, outMat;
-            inpMat = inputs[ii]->getUMat(ACCESS_READ);
-            outMat = outputs[ii].getUMat(ACCESS_WRITE);
+            // prepare weightsMat where each row is aligned and has enough zero padding on the right to
+            // use vectorized (i.e. with intrinsics) loops without tail processing
+            Mat wm = blobs[0].reshape(1, outCn).clone();
+            if( wm.step1() % VEC_ALIGN != 0 )
+            {
+                int newcols = (int)alignSize(wm.step1(), VEC_ALIGN);
+                Mat wm_buffer = Mat(outCn, newcols, wm.type());
+                Mat wm_padding = wm_buffer.colRange(wm.cols, newcols);
+                wm_padding.setTo(Scalar::all(0.));
+                Mat wm_aligned = wm_buffer.colRange(0, wm.cols);
+                wm.copyTo(wm_aligned);
+                wm = wm_aligned;
+            }
+            weightsMat = wm;
 
-            int batch_size = inpMat.size[0];
+            Mat biasMat = hasBias() ? blobs[1].reshape(1, outCn) : Mat();
+            biasvec.resize(outCn+2);
+            if( biasMat.empty() )
+            {
+                for( k = 0; k < outCn; k++ )
+                    biasvec[k] = 0.f;
+            }
+            else
+            {
+                for( k = 0; k < outCn; k++ )
+                    biasvec[k] = biasMat.at<float>(k);
+            }
 
-            if (!convolutionOp->Forward(inpMat, umat_blobs[0], hasBias() ? umat_blobs[1] : UMat(),
-                                        outMat, batch_size))
-               return false;
+            if( !bnorm.empty() || !scaleLayer.empty() || IS_POWER_LAYER(activ))
+            {
+                Mat scale, shift, scale2, shift2;
+                const float *scaleptr = 0, *shiftptr = 0;
+                const float *scaleptr2 = 0, *shiftptr2 = 0;
+                float a = 1.f, b = 0.f;
+
+                if( !bnorm.empty() )
+                {
+                    bnorm->getScaleShift(scale, shift);
+                    CV_Assert( scale.isContinuous() && shift.isContinuous() &&
+                               scale.type() == CV_32F && shift.type() == CV_32F &&
+                               scale.total() == (size_t)outCn &&
+                               shift.total() == (size_t)outCn );
+                    scaleptr = scale.ptr<float>();
+                    shiftptr = shift.ptr<float>();
+                }
+                if( !scaleLayer.empty() )
+                {
+                    scale2 = scaleLayer->blobs[0];
+                    CV_Assert( scale2.isContinuous() && scale2.type() == CV_32F &&
+                               scale2.total() == (size_t)outCn );
+                    scaleptr2 = scale2.ptr<float>();
+                    if( scaleLayer->hasBias )
+                    {
+                        shift2 = scaleLayer->blobs[1];
+                        CV_Assert( shift2.isContinuous() && shift2.type() == CV_32F &&
+                                   shift2.total() == (size_t)outCn );
+                        shiftptr2 = shift2.ptr<float>();
+                    }
+                }
+
+                if( IS_POWER_LAYER(activ) )
+                {
+                    Ptr<PowerLayer> activ_power = activ.dynamicCast<PowerLayer>();
+                    CV_Assert(activ_power);
+                    a = activ_power->scale;
+                    b = activ_power->shift;
+                }
+
+                if (shiftptr || shiftptr2 || b != 0.f)
+                    fusedBias = true;
+
+                for( int i = 0; i < outCn; i++ )
+                {
+                    float s1 = scaleptr ? scaleptr[i] : 1.f;
+                    float delta1 = shiftptr ? shiftptr[i] : 0.f;
+                    float s2 = scaleptr2 ? scaleptr2[i] : 1.f;
+                    float delta2 = shiftptr2 ? shiftptr2[i] : 0.f;
+                    float* w_i = weightsMat.ptr<float>(i);
+                    int j, wcols = weightsMat.cols;
+
+                    for( j = 0; j < wcols; j++ )
+                        w_i[j] *= (s1*s2*a);
+
+                    biasvec[i] = biasvec[i]*(s1*s2*a) + (delta1*s2*a + delta2*a + b);
+                }
+            }
+            biasvec[outCn] = biasvec[outCn+1] = biasvec[outCn-1];
         }
-        return true;
+
+        reluslope.clear();
+        if( activ )
+        {
+            Ptr<ReLULayer> activ_relu = activ.dynamicCast<ReLULayer>();
+            if( !activ_relu.empty() )
+            {
+                reluslope.assign(outCn+2, activ_relu->negativeSlope);
+                activType = OCL4DNN_CONV_FUSED_ACTIV_RELU;
+            }
+
+            Ptr<ChannelsPReLULayer> activ_chprelu = activ.dynamicCast<ChannelsPReLULayer>();
+            if( !activ_chprelu.empty() )
+            {
+                const Mat& m = activ_chprelu->blobs[0];
+                CV_Assert(m.isContinuous() && m.type() == CV_32F && (int)m.total() == outCn);
+                const float* mdata = m.ptr<float>();
+                reluslope.resize(outCn+2);
+                std::copy(mdata, mdata + outCn, reluslope.begin());
+                reluslope[outCn] = reluslope[outCn+1] = reluslope[outCn-1];
+                activType = OCL4DNN_CONV_FUSED_ACTIV_PRELU;
+            }
+        }
+
+        if ( newWeightAndBias )
+        {
+            weightsMat.copyTo(umat_blobs[0]);
+            if ( fusedBias )
+            {
+                if ( umat_blobs.size() < 2 )
+                    umat_blobs.resize(2);
+                umat_blobs[1] = UMat(biasvec, true);
+            }
+            convolutionOp->setBias(fusedBias || hasBias());
+            newWeightAndBias = false;
+        }
+
+        if ( newActiv )
+        {
+            if ( activType == OCL4DNN_CONV_FUSED_ACTIV_RELU )
+            {
+                CV_Assert(!reluslope.empty());
+                convolutionOp->setActivReLU(true, reluslope[0]);
+            }
+            else if ( activType == OCL4DNN_CONV_FUSED_ACTIV_PRELU)
+            {
+                CV_Assert(!reluslope.empty());
+                convolutionOp->setActivPReLU(true, reluslope);
+            }
+            else if ( activType == OCL4DNN_CONV_FUSED_ACTIV_POWER)
+            {
+                convolutionOp->setActivPower(true, power);
+            }
+            else if ( activType == OCL4DNN_CONV_FUSED_ACTIV_TANH)
+            {
+                convolutionOp->setActivTanh(true);
+            }
+            else
+            {
+                convolutionOp->setActivReLU(false, 0);
+                convolutionOp->setActivPReLU(false, reluslope);
+                convolutionOp->setActivPower(false, 1.f);
+                convolutionOp->setActivTanh(false);
+            }
+            newActiv = false;
+        }
+
+        UMat& inpMat = inputs[0];
+        UMat& outMat = outputs[0];
+        int batch_size = inpMat.size[0];
+
+        return convolutionOp->Forward(inpMat,
+                                      inputs.size() == 2 ? inputs[1] : UMat(),
+                                      umat_blobs[0],
+                                      (hasBias() || fusedBias) ? umat_blobs[1] : UMat(),
+                                      outMat,
+                                      batch_size);
     }
 #endif
+
+    void forward(InputArrayOfArrays inputs_arr, OutputArrayOfArrays outputs_arr, OutputArrayOfArrays internals_arr)
+    {
+        CV_TRACE_FUNCTION();
+        CV_TRACE_ARG_VALUE(name, "name", name.c_str());
+
+        CV_OCL_RUN((preferableTarget == DNN_TARGET_OPENCL) &&
+                   OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
+                   forward_ocl(inputs_arr, outputs_arr, internals_arr))
+
+        Layer::forward_fallback(inputs_arr, outputs_arr, internals_arr);
+    }
 
     void forward(std::vector<Mat*> &inputs, std::vector<Mat> &outputs, std::vector<Mat> &internals)
     {
@@ -690,14 +930,11 @@ public:
                name.c_str(), inputs[0]->size[0], inputs[0]->size[1], inputs[0]->size[2], inputs[0]->size[3],
                kernel.width, kernel.height, pad.width, pad.height,
                stride.width, stride.height, dilation.width, dilation.height);*/
-        CV_Assert(inputs.size() == (size_t)1 && inputs[0]->size[1] % blobs[0].size[1] == 0);
+        CV_Assert(inputs.size() == (size_t)1, inputs[0]->size[1] % blobs[0].size[1] == 0,
+                  outputs.size() == 1, inputs[0]->data != outputs[0].data);
+
         int ngroups = inputs[0]->size[1]/blobs[0].size[1];
         CV_Assert(outputs[0].size[1] % ngroups == 0);
-
-        CV_OCL_RUN((preferableTarget == DNN_TARGET_OPENCL) &&
-                   OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
-                   forward_ocl(inputs, outputs, internals))
-
         int k, outCn = blobs[0].size[0];
 
         if( weightsMat.empty() )
@@ -784,7 +1021,9 @@ public:
         {
             Ptr<ReLULayer> activ_relu = activ.dynamicCast<ReLULayer>();
             if( !activ_relu.empty() )
+            {
                 reluslope.assign(outCn+2, activ_relu->negativeSlope);
+            }
 
             Ptr<ChannelsPReLULayer> activ_chprelu = activ.dynamicCast<ChannelsPReLULayer>();
             if( !activ_chprelu.empty() )
@@ -812,7 +1051,7 @@ public:
         int64 flops = 0;
         for (int i = 0; i < inputs.size(); i++)
         {
-            flops += total(outputs[i])*(2*kernel.area()*inputs[i][1] + 1);
+            flops += total(outputs[i])*(CV_BIG_INT(2)*kernel.area()*inputs[i][1] + 1);
         }
 
         return flops;
@@ -823,6 +1062,8 @@ class DeConvolutionLayerImpl : public BaseConvolutionLayerImpl
 {
 public:
     Mat weightsMat, biasesMat;
+    UMat umat_weights;
+    UMat umat_biases;
 
     MatShape computeColRowShape(const MatShape &inpShape, const MatShape &outShape) const
     {
@@ -882,6 +1123,7 @@ public:
             nstripes_ = nstripes;
             useAVX = checkHardwareSupport(CPU_AVX);
             useAVX2 = checkHardwareSupport(CPU_AVX2);
+            useAVX512 = CV_CPU_HAS_SUPPORT_AVX512_SKX;
         }
 
         void operator()(const Range& range_) const
@@ -899,6 +1141,11 @@ public:
             size_t bstep = b_->step1();
             size_t cstep = c_->step1();
 
+        #if CV_TRY_AVX512_SKX
+            if( useAVX512 )
+                opt_AVX512_SKX::fastGEMM( aptr, astep, bptr, bstep, cptr, cstep, mmax, kmax, nmax );
+            else
+        #endif
         #if CV_TRY_AVX2
             if( useAVX2 )
                 opt_AVX2::fastGEMM( aptr, astep, bptr, bstep, cptr, cstep, mmax, kmax, nmax );
@@ -1003,6 +1250,7 @@ public:
         int nstripes_;
         bool useAVX;
         bool useAVX2;
+        bool useAVX512;
     };
 
     class Col2ImInvoker : public cv::ParallelLoopBody
@@ -1105,6 +1353,110 @@ public:
             }
         }
     };
+
+#ifdef HAVE_OPENCL
+    bool forward_ocl(InputArrayOfArrays inputs_, OutputArrayOfArrays outputs_, OutputArrayOfArrays internals_)
+    {
+        std::vector<UMat> inputs;
+        std::vector<UMat> outputs;
+        std::vector<UMat> internals;
+
+        inputs_.getUMatVector(inputs);
+        outputs_.getUMatVector(outputs);
+        internals_.getUMatVector(internals);
+
+        int outCn = numOutput;
+        int inpCn = inputs[0].size[1];
+
+        if (is1x1())
+            return false;
+
+        if (umat_weights.empty())
+        {
+            transpose(blobs[0].reshape(1, inpCn), umat_weights);
+            umat_biases = hasBias() ? blobs[1].reshape(1, outCn).getUMat(ACCESS_READ) :
+                          UMat::zeros(outCn, 1, CV_32F);
+        }
+
+        String buildopt = format("-DT=%s ", ocl::typeToStr(inputs[0].type()));
+        buildopt += format("-DPAD_H=%d -DPAD_W=%d -DKERNEL_H=%d -DKERNEL_W=%d -DSTRIDE_H=%d -DSTRIDE_W=%d ",
+                           pad.height, pad.width, kernel.height, kernel.width, stride.height, stride.width);
+
+        for (size_t ii = 0; ii < outputs.size(); ii++)
+        {
+            int ngroups = outCn / blobs[0].size[1];
+            int inpGroupCn = inpCn / ngroups;
+            int outGroupCn = blobs[0].size[1];
+            const UMat& inp = inputs[ii];
+            UMat& out = outputs[ii];
+            int numImg = inp.size[0];
+            int inpH = inp.size[2], inpW = inp.size[3];
+            int outH = out.size[2], outW = out.size[3];
+
+            MatShape inpshape = shape(numImg*inpCn, inpH*inpW);
+            MatShape outshape = shape(numImg*outCn, outH*outW);
+            UMat convBlob = inputs[ii].reshape(1, inpshape.size(), &inpshape[0]);
+            UMat decnBlob = out.reshape(1, outshape.size(), &outshape[0]);
+            int rows = internals[0].rows / ngroups;
+
+            for (int n = 0; n < numImg; n++)
+            {
+                for (int g = 0; g < ngroups; g++)
+                {
+                    UMat colMat = internals[0].rowRange(_Range(g * rows, rows));
+                    UMat convMat = convBlob.rowRange(_Range((g + n * ngroups) * inpGroupCn, inpGroupCn));
+                    UMat wghtMat = umat_weights.colRange(_Range(g * inpGroupCn, inpGroupCn));
+                    gemm(wghtMat, convMat, 1, noArray(), 0, colMat, 0);
+                }
+
+                for (int g = 0; g < ngroups; g++)
+                {
+                    int total = outGroupCn * decnBlob.cols;
+                    int index = 0;
+                    int height_col = (outH + 2 * pad.height - kernel.height) / stride.height + 1;
+                    int width_col = (outW + 2 * pad.width - kernel.width) / stride.width + 1;
+                    int coeff_h = (1 - stride.height * kernel.width * height_col) * width_col;
+                    int coeff_w = (1 - stride.width * height_col * width_col);
+
+                    ocl::Kernel k("col2im", ocl::dnn::col2im_oclsrc, buildopt);
+                    k.set(index++, total);
+                    k.set(index++, ocl::KernelArg::PtrReadOnly(internals[0]));
+                    k.set(index++, (int)(g * rows * internals[0].cols));
+                    k.set(index++, outGroupCn);
+                    k.set(index++, outH);
+                    k.set(index++, outW);
+                    k.set(index++, height_col);
+                    k.set(index++, width_col);
+                    k.set(index++, coeff_h);
+                    k.set(index++, coeff_w);
+                    k.set(index++, ocl::KernelArg::PtrReadOnly(umat_biases));
+                    k.set(index++, (int)(g * outGroupCn * umat_biases.cols));
+                    k.set(index++, ocl::KernelArg::PtrWriteOnly(decnBlob));
+                    k.set(index++, (int)((g + n * ngroups) * outGroupCn * decnBlob.cols));
+
+                    size_t global[] = { (size_t)total };
+                    bool ret = k.run(1, global, NULL, false);
+                    if (!ret)
+                        return false;
+                }
+            }
+        }
+
+        return true;
+    }
+#endif
+
+    void forward(InputArrayOfArrays inputs_arr, OutputArrayOfArrays outputs_arr, OutputArrayOfArrays internals_arr)
+    {
+        CV_TRACE_FUNCTION();
+        CV_TRACE_ARG_VALUE(name, "name", name.c_str());
+
+        CV_OCL_RUN((preferableTarget == DNN_TARGET_OPENCL) &&
+                   OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
+                   forward_ocl(inputs_arr, outputs_arr, internals_arr))
+
+        Layer::forward_fallback(inputs_arr, outputs_arr, internals_arr);
+    }
 
     void forward(std::vector<Mat *> &inputs, std::vector<Mat> &outputs, std::vector<Mat> &internals)
     {
@@ -1222,7 +1574,7 @@ public:
 
         for (int i = 0; i < inputs.size(); i++)
         {
-            flops += 2*outChannels*kernel.area()*total(inputs[i]);
+            flops += CV_BIG_INT(2)*outChannels*kernel.area()*total(inputs[i]);
         }
 
         return flops;

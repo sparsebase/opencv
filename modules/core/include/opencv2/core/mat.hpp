@@ -357,6 +357,9 @@ public:
 
     void assign(const UMat& u) const;
     void assign(const Mat& m) const;
+
+    void assign(const std::vector<UMat>& v) const;
+    void assign(const std::vector<Mat>& v) const;
 };
 
 
@@ -542,14 +545,6 @@ struct CV_EXPORTS UMatData
 };
 
 
-struct CV_EXPORTS UMatDataAutoLock
-{
-    explicit UMatDataAutoLock(UMatData* u);
-    ~UMatDataAutoLock();
-    UMatData* u;
-};
-
-
 struct CV_EXPORTS MatSize
 {
     explicit MatSize(int* _p);
@@ -582,7 +577,7 @@ protected:
 An example demonstrating the serial out capabilities of cv::Mat
 */
 
- /** @brief n-dimensional dense array class
+ /** @brief n-dimensional dense array class \anchor CVMat_Details
 
 The class Mat represents an n-dimensional dense numerical single-channel or multi-channel array. It
 can be used to store real or complex-valued vectors and matrices, grayscale or color images, voxel
@@ -1783,7 +1778,27 @@ public:
      */
     size_t total(int startDim, int endDim=INT_MAX) const;
 
-    //! returns N if the matrix is 1-channel (N x ptdim) or ptdim-channel (1 x N) or (N x 1); negative number otherwise
+    /**
+     * @param elemChannels Number of channels or number of columns the matrix should have.
+     *                     For a 2-D matrix, when the matrix has only 1 column, then it should have
+     *                     elemChannels channels; When the matrix has only 1 channel,
+     *                     then it should have elemChannels columns.
+     *                     For a 3-D matrix, it should have only one channel. Furthermore,
+     *                     if the number of planes is not one, then the number of rows
+     *                     within every plane has to be 1; if the number of rows within
+     *                     every plane is not 1, then the number of planes has to be 1.
+     * @param depth The depth the matrix should have. Set it to -1 when any depth is fine.
+     * @param requireContinuous Set it to true to require the matrix to be continuous
+     * @return -1 if the requirement is not satisfied.
+     *         Otherwise, it returns the number of elements in the matrix. Note
+     *         that an element may have multiple channels.
+     *
+     * The following code demonstrates its usage for a 2-d matrix:
+     * @snippet snippets/core_mat_checkVector.cpp example-2d
+     *
+     * The following code demonstrates its usage for a 3-d matrix:
+     * @snippet snippets/core_mat_checkVector.cpp example-3d
+     */
     int checkVector(int elemChannels, int depth=-1, bool requireContinuous=true) const;
 
     /** @brief Returns a pointer to the specified matrix row.
@@ -2418,7 +2433,7 @@ public:
     void copyTo( OutputArray m ) const;
     //! copies those matrix elements to "m" that are marked with non-zero mask elements.
     void copyTo( OutputArray m, InputArray mask ) const;
-    //! converts matrix to another datatype with optional scalng. See cvConvertScale.
+    //! converts matrix to another datatype with optional scaling. See cvConvertScale.
     void convertTo( OutputArray m, int rtype, double alpha=1, double beta=0 ) const;
 
     void assignTo( UMat& m, int type=-1 ) const;

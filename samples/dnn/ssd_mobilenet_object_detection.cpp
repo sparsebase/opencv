@@ -2,18 +2,14 @@
 #include <opencv2/dnn/shape_utils.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
+#include <iostream>
 
 using namespace cv;
-using namespace cv::dnn;
-
-#include <fstream>
-#include <iostream>
-#include <cstdlib>
 using namespace std;
+using namespace cv::dnn;
 
 const size_t inWidth = 300;
 const size_t inHeight = 300;
-const float WHRatio = inWidth / (float)inHeight;
 const float inScaleFactor = 0.007843f;
 const float meanVal = 127.5;
 const char* classNames[] = {"background",
@@ -23,99 +19,135 @@ const char* classNames[] = {"background",
                             "motorbike", "person", "pottedplant",
                             "sheep", "sofa", "train", "tvmonitor"};
 
-const char* about = "This sample uses Single-Shot Detector "
-                    "(https://arxiv.org/abs/1512.02325)"
-                    "to detect objects on image.\n"
-                    ".caffemodel model's file is avaliable here: "
-                    "https://github.com/chuanqi305/MobileNet-SSD\n";
-
-const char* params
+const String keys
     = "{ help           | false | print usage         }"
-      "{ proto          | MobileNetSSD_deploy.prototxt | model configuration }"
+      "{ proto          | MobileNetSSD_deploy.prototxt   | model configuration }"
       "{ model          | MobileNetSSD_deploy.caffemodel | model weights }"
-      "{ video          |       | video for detection }"
+      "{ camera_device  | 0     | camera device number }"
+      "{ camera_width   | 640   | camera device width  }"
+      "{ camera_height  | 480   | camera device height }"
+      "{ video          |       | video or image for detection}"
       "{ out            |       | path to output video file}"
-      "{ min_confidence | 0.2   | min confidence      }";
+      "{ min_confidence | 0.2   | min confidence      }"
+      "{ opencl         | false | enable OpenCL }"
+;
 
 int main(int argc, char** argv)
 {
-    cv::CommandLineParser parser(argc, argv, params);
+    CommandLineParser parser(argc, argv, keys);
+    parser.about("This sample uses MobileNet Single-Shot Detector "
+                 "(https://arxiv.org/abs/1704.04861) "
+                 "to detect objects on camera/video/image.\n"
+                 ".caffemodel model's file is available here: "
+                 "https://github.com/chuanqi305/MobileNet-SSD\n"
+                 "Default network is 300x300 and 20-classes VOC.\n");
 
     if (parser.get<bool>("help"))
     {
-        cout << about << endl;
         parser.printMessage();
         return 0;
     }
 
-    String modelConfiguration = parser.get<string>("proto");
-    String modelBinary = parser.get<string>("model");
+    String modelConfiguration = parser.get<String>("proto");
+    String modelBinary = parser.get<String>("model");
+    CV_Assert(!modelConfiguration.empty() && !modelBinary.empty());
 
     //! [Initialize network]
     dnn::Net net = readNetFromCaffe(modelConfiguration, modelBinary);
     //! [Initialize network]
 
-    VideoCapture cap(parser.get<String>("video"));
-    if(!cap.isOpened()) // check if we succeeded
+    if (parser.get<bool>("opencl"))
     {
-        cap = VideoCapture(0);
+        net.setPreferableTarget(DNN_TARGET_OPENCL);
+    }
+
+    if (net.empty())
+    {
+        cerr << "Can't load network by using the following files: " << endl;
+        cerr << "prototxt:   " << modelConfiguration << endl;
+        cerr << "caffemodel: " << modelBinary << endl;
+        cerr << "Models can be downloaded here:" << endl;
+        cerr << "https://github.com/chuanqi305/MobileNet-SSD" << endl;
+        exit(-1);
+    }
+
+    VideoCapture cap;
+    if (!parser.has("video"))
+    {
+        int cameraDevice = parser.get<int>("camera_device");
+        cap = VideoCapture(cameraDevice);
         if(!cap.isOpened())
         {
-            cout << "Couldn't find camera" << endl;
+            cout << "Couldn't find camera: " << cameraDevice << endl;
+            return -1;
+        }
+
+        cap.set(CAP_PROP_FRAME_WIDTH, parser.get<int>("camera_width"));
+        cap.set(CAP_PROP_FRAME_HEIGHT, parser.get<int>("camera_height"));
+    }
+    else
+    {
+        cap.open(parser.get<String>("video"));
+        if(!cap.isOpened())
+        {
+            cout << "Couldn't open image or video: " << parser.get<String>("video") << endl;
             return -1;
         }
     }
 
-    Size inVideoSize = Size((int) cap.get(CV_CAP_PROP_FRAME_WIDTH),    //Acquire input size
-                            (int) cap.get(CV_CAP_PROP_FRAME_HEIGHT));
+    //Acquire input size
+    Size inVideoSize((int) cap.get(CAP_PROP_FRAME_WIDTH),
+                     (int) cap.get(CAP_PROP_FRAME_HEIGHT));
 
-    Size cropSize;
-    if (inVideoSize.width / (float)inVideoSize.height > WHRatio)
-    {
-        cropSize = Size(static_cast<int>(inVideoSize.height * WHRatio),
-                        inVideoSize.height);
-    }
-    else
-    {
-        cropSize = Size(inVideoSize.width,
-                        static_cast<int>(inVideoSize.width / WHRatio));
-    }
-
-    Rect crop(Point((inVideoSize.width - cropSize.width) / 2,
-                    (inVideoSize.height - cropSize.height) / 2),
-              cropSize);
-
+    double fps = cap.get(CAP_PROP_FPS);
+    int fourcc = static_cast<int>(cap.get(CAP_PROP_FOURCC));
     VideoWriter outputVideo;
     outputVideo.open(parser.get<String>("out") ,
-                     static_cast<int>(cap.get(CV_CAP_PROP_FOURCC)),
-                     cap.get(CV_CAP_PROP_FPS), cropSize, true);
+                     (fourcc != 0 ? fourcc : VideoWriter::fourcc('M','J','P','G')),
+                     (fps != 0 ? fps : 10.0), inVideoSize, true);
 
     for(;;)
     {
         Mat frame;
-        cap >> frame; // get a new frame from camera
-        //! [Prepare blob]
+        cap >> frame; // get a new frame from camera/video or read image
 
+        if (frame.empty())
+        {
+            waitKey();
+            break;
+        }
+
+        if (frame.channels() == 4)
+            cvtColor(frame, frame, COLOR_BGRA2BGR);
+
+        //! [Prepare blob]
         Mat inputBlob = blobFromImage(frame, inScaleFactor,
-                                      Size(inWidth, inHeight), meanVal, false); //Convert Mat to batch of images
+                                      Size(inWidth, inHeight),
+                                      Scalar(meanVal, meanVal, meanVal),
+                                      false, false); //Convert Mat to batch of images
         //! [Prepare blob]
 
         //! [Set input blob]
-        net.setInput(inputBlob, "data"); //set the network input
+        net.setInput(inputBlob); //set the network input
         //! [Set input blob]
 
         //! [Make forward pass]
-        Mat detection = net.forward("detection_out"); //compute output
+        Mat detection = net.forward(); //compute output
         //! [Make forward pass]
 
-        std::vector<double> layersTimings;
+        vector<double> layersTimings;
         double freq = getTickFrequency() / 1000;
         double time = net.getPerfProfile(layersTimings) / freq;
-        cout << "Inference time, ms: " << time << endl;
 
         Mat detectionMat(detection.size[2], detection.size[3], CV_32F, detection.ptr<float>());
 
-        frame = frame(crop);
+        if (!outputVideo.isOpened())
+        {
+            putText(frame, format("FPS: %.2f ; time: %.2f ms", 1000.f/time, time),
+                    Point(20,20), 0, 0.5, Scalar(0,0,255));
+        }
+        else
+            cout << "Inference time, ms: " << time << endl;
 
         float confidenceThreshold = parser.get<float>("min_confidence");
         for(int i = 0; i < detectionMat.rows; i++)
@@ -126,27 +158,20 @@ int main(int argc, char** argv)
             {
                 size_t objectClass = (size_t)(detectionMat.at<float>(i, 1));
 
-                int xLeftBottom = static_cast<int>(detectionMat.at<float>(i, 3) * frame.cols);
-                int yLeftBottom = static_cast<int>(detectionMat.at<float>(i, 4) * frame.rows);
-                int xRightTop = static_cast<int>(detectionMat.at<float>(i, 5) * frame.cols);
-                int yRightTop = static_cast<int>(detectionMat.at<float>(i, 6) * frame.rows);
+                int left = static_cast<int>(detectionMat.at<float>(i, 3) * frame.cols);
+                int top = static_cast<int>(detectionMat.at<float>(i, 4) * frame.rows);
+                int right = static_cast<int>(detectionMat.at<float>(i, 5) * frame.cols);
+                int bottom = static_cast<int>(detectionMat.at<float>(i, 6) * frame.rows);
 
-                ostringstream ss;
-                ss << confidence;
-                String conf(ss.str());
-
-                Rect object((int)xLeftBottom, (int)yLeftBottom,
-                            (int)(xRightTop - xLeftBottom),
-                            (int)(yRightTop - yLeftBottom));
-
-                rectangle(frame, object, Scalar(0, 255, 0));
-                String label = String(classNames[objectClass]) + ": " + conf;
+                rectangle(frame, Point(left, top), Point(right, bottom), Scalar(0, 255, 0));
+                String label = format("%s: %.2f", classNames[objectClass], confidence);
                 int baseLine = 0;
                 Size labelSize = getTextSize(label, FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
-                rectangle(frame, Rect(Point(xLeftBottom, yLeftBottom - labelSize.height),
-                                      Size(labelSize.width, labelSize.height + baseLine)),
-                          Scalar(255, 255, 255), CV_FILLED);
-                putText(frame, label, Point(xLeftBottom, yLeftBottom),
+                top = max(top, labelSize.height);
+                rectangle(frame, Point(left, top - labelSize.height),
+                          Point(left + labelSize.width, top + baseLine),
+                          Scalar(255, 255, 255), FILLED);
+                putText(frame, label, Point(left, top),
                         FONT_HERSHEY_SIMPLEX, 0.5, Scalar(0,0,0));
             }
         }

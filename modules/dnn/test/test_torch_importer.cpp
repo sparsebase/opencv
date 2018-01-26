@@ -39,8 +39,6 @@
 //
 //M*/
 
-#ifdef ENABLE_TORCH_IMPORTER
-
 #include "test_precomp.hpp"
 #include "npy_blob.hpp"
 #include <opencv2/dnn/shape_utils.hpp>
@@ -167,9 +165,19 @@ TEST(Torch_Importer, run_deconv)
     runTorchNet("net_deconv");
 }
 
+OCL_TEST(Torch_Importer, run_deconv)
+{
+    runTorchNet("net_deconv", DNN_TARGET_OPENCL);
+}
+
 TEST(Torch_Importer, run_batch_norm)
 {
-    runTorchNet("net_batch_norm");
+    runTorchNet("net_batch_norm", DNN_TARGET_CPU, "", false, true);
+}
+
+OCL_TEST(Torch_Importer, run_batch_norm)
+{
+    runTorchNet("net_batch_norm", DNN_TARGET_OPENCL, "", false, true);
 }
 
 TEST(Torch_Importer, net_prelu)
@@ -227,10 +235,26 @@ TEST(Torch_Importer, net_normalize)
     runTorchNet("net_normalize", DNN_TARGET_CPU, "", false, true);
 }
 
+OCL_TEST(Torch_Importer, net_normalize)
+{
+    runTorchNet("net_normalize", DNN_TARGET_OPENCL, "", false, true);
+}
+
 TEST(Torch_Importer, net_padding)
 {
     runTorchNet("net_padding", DNN_TARGET_CPU, "", false, true);
     runTorchNet("net_spatial_zero_padding", DNN_TARGET_CPU, "", false, true);
+    runTorchNet("net_spatial_reflection_padding", DNN_TARGET_CPU, "", false, true);
+}
+
+TEST(Torch_Importer, net_non_spatial)
+{
+    runTorchNet("net_non_spatial", DNN_TARGET_CPU, "", false, true);
+}
+
+OCL_TEST(Torch_Importer, net_non_spatial)
+{
+    runTorchNet("net_non_spatial", DNN_TARGET_OPENCL, "", false, true);
 }
 
 TEST(Torch_Importer, ENet_accuracy)
@@ -310,9 +334,8 @@ OCL_TEST(Torch_Importer, ENet_accuracy)
     Net net;
     {
         const string model = findDataFile("dnn/Enet-model-best.net", false);
-        Ptr<Importer> importer = createTorchImporter(model, true);
-        ASSERT_TRUE(importer != NULL);
-        importer->populateNet(net);
+        net = readNetFromTorch(model, true);
+        ASSERT_TRUE(!net.empty());
     }
 
     net.setPreferableBackend(DNN_BACKEND_DEFAULT);
@@ -338,6 +361,80 @@ OCL_TEST(Torch_Importer, ENet_accuracy)
     }
 }
 
+// Check accuracy of style transfer models from https://github.com/jcjohnson/fast-neural-style
+// th fast_neural_style.lua \
+//   -input_image ~/opencv_extra/testdata/dnn/googlenet_1.png \
+//   -output_image lena.png \
+//   -median_filter 0 \
+//   -image_size 0 \
+//   -model models/eccv16/starry_night.t7
+// th fast_neural_style.lua \
+//   -input_image ~/opencv_extra/testdata/dnn/googlenet_1.png \
+//   -output_image lena.png \
+//   -median_filter 0 \
+//   -image_size 0 \
+//   -model models/instance_norm/feathers.t7
+TEST(Torch_Importer, FastNeuralStyle_accuracy)
+{
+    std::string models[] = {"dnn/fast_neural_style_eccv16_starry_night.t7",
+                            "dnn/fast_neural_style_instance_norm_feathers.t7"};
+    std::string targets[] = {"dnn/lena_starry_night.png", "dnn/lena_feathers.png"};
+
+    for (int i = 0; i < 2; ++i)
+    {
+        const string model = findDataFile(models[i], false);
+        Net net = readNetFromTorch(model);
+
+        Mat img = imread(findDataFile("dnn/googlenet_1.png", false));
+        Mat inputBlob = blobFromImage(img, 1.0, Size(), Scalar(103.939, 116.779, 123.68), false);
+
+        net.setInput(inputBlob);
+        Mat out = net.forward();
+
+        // Deprocessing.
+        getPlane(out, 0, 0) += 103.939;
+        getPlane(out, 0, 1) += 116.779;
+        getPlane(out, 0, 2) += 123.68;
+        out = cv::min(cv::max(0, out), 255);
+
+        Mat ref = imread(findDataFile(targets[i]));
+        Mat refBlob = blobFromImage(ref, 1.0, Size(), Scalar(), false);
+
+        normAssert(out, refBlob, "", 0.5, 1.1);
+    }
 }
 
-#endif
+OCL_TEST(Torch_Importer, FastNeuralStyle_accuracy)
+{
+    std::string models[] = {"dnn/fast_neural_style_eccv16_starry_night.t7",
+                            "dnn/fast_neural_style_instance_norm_feathers.t7"};
+    std::string targets[] = {"dnn/lena_starry_night.png", "dnn/lena_feathers.png"};
+
+    for (int i = 0; i < 2; ++i)
+    {
+        const string model = findDataFile(models[i], false);
+        Net net = readNetFromTorch(model);
+
+        net.setPreferableBackend(DNN_BACKEND_DEFAULT);
+        net.setPreferableTarget(DNN_TARGET_OPENCL);
+
+        Mat img = imread(findDataFile("dnn/googlenet_1.png", false));
+        Mat inputBlob = blobFromImage(img, 1.0, Size(), Scalar(103.939, 116.779, 123.68), false);
+
+        net.setInput(inputBlob);
+        Mat out = net.forward();
+
+        // Deprocessing.
+        getPlane(out, 0, 0) += 103.939;
+        getPlane(out, 0, 1) += 116.779;
+        getPlane(out, 0, 2) += 123.68;
+        out = cv::min(cv::max(0, out), 255);
+
+        Mat ref = imread(findDataFile(targets[i]));
+        Mat refBlob = blobFromImage(ref, 1.0, Size(), Scalar(), false);
+
+        normAssert(out, refBlob, "", 0.5, 1.1);
+    }
+}
+
+}

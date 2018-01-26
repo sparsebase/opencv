@@ -58,7 +58,7 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
   You can use both API, but factory API is less convinient for native C++ programming and basically designed for use inside importers (see @ref readNetFromCaffe(), @ref readNetFromTorch(), @ref readNetFromTensorflow()).
 
   Bult-in layers partially reproduce functionality of corresponding Caffe and Torch7 layers.
-  In partuclar, the following layers and Caffe @ref Importer were tested to reproduce <a href="http://caffe.berkeleyvision.org/tutorial/layers.html">Caffe</a> functionality:
+  In partuclar, the following layers and Caffe importer were tested to reproduce <a href="http://caffe.berkeleyvision.org/tutorial/layers.html">Caffe</a> functionality:
   - Convolution
   - Deconvolution
   - Pooling
@@ -74,7 +74,7 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
     class CV_EXPORTS BlankLayer : public Layer
     {
     public:
-        static Ptr<BlankLayer> create(const LayerParams &params);
+        static Ptr<Layer> create(const LayerParams &params);
     };
 
     //! LSTM recurrent layer
@@ -221,11 +221,6 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
     class CV_EXPORTS LRNLayer : public Layer
     {
     public:
-        enum Type
-        {
-            CHANNEL_NRM,
-            SPATIAL_NRM
-        };
         int type;
 
         int size;
@@ -238,19 +233,17 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
     class CV_EXPORTS PoolingLayer : public Layer
     {
     public:
-        enum Type
-        {
-            MAX,
-            AVE,
-            STOCHASTIC
-        };
-
         int type;
         Size kernel, stride, pad;
         bool globalPooling;
         bool computeMaxIdx;
         String padMode;
         bool ceilMode;
+        // ROIPooling parameters.
+        Size pooledSize;
+        float spatialScale;
+        // PSROIPooling parameters.
+        int psRoiOutChannels;
 
         static Ptr<PoolingLayer> create(const LayerParams& params);
     };
@@ -261,14 +254,6 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
         bool logSoftMax;
 
         static Ptr<SoftmaxLayer> create(const LayerParams& params);
-    };
-
-    class CV_EXPORTS LPNormalizeLayer : public Layer
-    {
-    public:
-        float pnorm, epsilon;
-
-        static Ptr<LPNormalizeLayer> create(const LayerParams& params);
     };
 
     class CV_EXPORTS InnerProductLayer : public Layer
@@ -385,6 +370,7 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
      *                 starting from the first one. The rest of dimensions won't
      *                 be padded.
      * @param value Value to be padded. Defaults to zero.
+     * @param type Padding type: 'constant', 'reflect'
      * @param input_dims Torch's parameter. If @p input_dims is not equal to the
      *                   actual input dimensionality then the `[0]th` dimension
      *                   is considered as a batch dimension and @p paddings are shifted
@@ -422,7 +408,7 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
     class CV_EXPORTS ChannelsPReLULayer : public ActivationLayer
     {
     public:
-        static Ptr<ChannelsPReLULayer> create(const LayerParams& params);
+        static Ptr<Layer> create(const LayerParams& params);
     };
 
     class CV_EXPORTS ELULayer : public ActivationLayer
@@ -477,13 +463,6 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
     class CV_EXPORTS EltwiseLayer : public Layer
     {
     public:
-        enum EltwiseOp
-        {
-            PROD = 0,
-            SUM = 1,
-            MAX = 2,
-        };
-
         static Ptr<EltwiseLayer> create(const LayerParams &params);
     };
 
@@ -511,6 +490,7 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
     {
     public:
         bool hasBias;
+        int axis;
 
         static Ptr<ScaleLayer> create(const LayerParams& params);
     };
@@ -527,15 +507,55 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
         static Ptr<PriorBoxLayer> create(const LayerParams& params);
     };
 
+    class CV_EXPORTS ReorgLayer : public Layer
+    {
+    public:
+        static Ptr<ReorgLayer> create(const LayerParams& params);
+    };
+
+    class CV_EXPORTS RegionLayer : public Layer
+    {
+    public:
+        static Ptr<RegionLayer> create(const LayerParams& params);
+    };
+
     class CV_EXPORTS DetectionOutputLayer : public Layer
     {
     public:
         static Ptr<DetectionOutputLayer> create(const LayerParams& params);
     };
 
+    /**
+     * @brief \f$ L_p \f$ - normalization layer.
+     * @param p Normalization factor. The most common `p = 1` for \f$ L_1 \f$ -
+     *          normalization or `p = 2` for \f$ L_2 \f$ - normalization or a custom one.
+     * @param eps Parameter \f$ \epsilon \f$ to prevent a division by zero.
+     * @param across_spatial If true, normalize an input across all non-batch dimensions.
+     *                       Otherwise normalize an every channel separately.
+     *
+     * Across spatial:
+     * @f[
+     * norm = \sqrt[p]{\epsilon + \sum_{x, y, c} |src(x, y, c)|^p } \\
+     * dst(x, y, c) = \frac{ src(x, y, c) }{norm}
+     * @f]
+     *
+     * Channel wise normalization:
+     * @f[
+     * norm(c) = \sqrt[p]{\epsilon + \sum_{x, y} |src(x, y, c)|^p } \\
+     * dst(x, y, c) = \frac{ src(x, y, c) }{norm(c)}
+     * @f]
+     *
+     * Where `x, y` - spatial cooridnates, `c` - channel.
+     *
+     * An every sample in the batch is normalized separately. Optionally,
+     * output is scaled by the trained parameters.
+     */
     class NormalizeBBoxLayer : public Layer
     {
     public:
+        float pnorm, epsilon;
+        bool acrossSpatial;
+
         static Ptr<NormalizeBBoxLayer> create(const LayerParams& params);
     };
 
@@ -548,6 +568,12 @@ CV__DNN_EXPERIMENTAL_NS_BEGIN
     {
     public:
         static Ptr<ResizeNearestNeighborLayer> create(const LayerParams& params);
+    };
+
+    class CV_EXPORTS ProposalLayer : public Layer
+    {
+    public:
+        static Ptr<ProposalLayer> create(const LayerParams& params);
     };
 
 //! @}

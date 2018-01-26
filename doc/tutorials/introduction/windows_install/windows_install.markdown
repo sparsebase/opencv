@@ -105,12 +105,8 @@ Installation by Making Your Own Libraries from the Source Files {#tutorial_windo
 You may find the content of this tutorial also inside the following videos:
 [Part 1](https://www.youtube.com/watch?v=NnovZ1cTlMs) and [Part 2](https://www.youtube.com/watch?v=qGNWMcfWwPU), hosted on YouTube.
 
-\htmlonly
-<div align="center">
-<iframe title="Install OpenCV by using its source files - Part 1" width="560" height="349" src="http://www.youtube.com/embed/NnovZ1cTlMs?rel=0&loop=1" frameborder="0" allowfullscreen align="middle"></iframe>
-<iframe title="Install OpenCV by using its source files - Part 2" width="560" height="349" src="http://www.youtube.com/embed/qGNWMcfWwPU?rel=0&loop=1" frameborder="0" allowfullscreen align="middle"></iframe>
-</div>
-\endhtmlonly
+@youtube{NnovZ1cTlMs}
+@youtube{qGNWMcfWwPU}
 
 **warning**
 
@@ -405,6 +401,6 @@ Save it to the registry and you are done. If you ever change the location of you
 or want to try out your application with a different build, all you will need to do is to update the
 OPENCV_DIR variable via the *setx* command inside a command window.
 
-Now you can continue reading the tutorials with the @ref tutorial_windows_visual_studio_Opencv section.
+Now you can continue reading the tutorials with the @ref tutorial_windows_visual_studio_opencv section.
 There you will find out how to use the OpenCV library in your own projects with the help of the
 Microsoft Visual Studio IDE.

@@ -146,15 +146,21 @@ namespace cv { namespace debug_build_guard { } using namespace debug_build_guard
 #define CV_CPU_AVX_512CD        15
 #define CV_CPU_AVX_512DQ        16
 #define CV_CPU_AVX_512ER        17
-#define CV_CPU_AVX_512IFMA512   18
+#define CV_CPU_AVX_512IFMA512   18 // deprecated
+#define CV_CPU_AVX_512IFMA      18
 #define CV_CPU_AVX_512PF        19
 #define CV_CPU_AVX_512VBMI      20
 #define CV_CPU_AVX_512VL        21
 
 #define CV_CPU_NEON   100
 
+#define CV_CPU_VSX 200
+
+// CPU features groups
+#define CV_CPU_AVX512_SKX       256
+
 // when adding to this list remember to update the following enum
-#define CV_HARDWARE_MAX_FEATURE 255
+#define CV_HARDWARE_MAX_FEATURE 512
 
 /** @brief Available CPU features.
 */
@@ -177,12 +183,19 @@ enum CpuFeatures {
     CPU_AVX_512CD       = 15,
     CPU_AVX_512DQ       = 16,
     CPU_AVX_512ER       = 17,
-    CPU_AVX_512IFMA512  = 18,
+    CPU_AVX_512IFMA512  = 18, // deprecated
+    CPU_AVX_512IFMA     = 18,
     CPU_AVX_512PF       = 19,
     CPU_AVX_512VBMI     = 20,
     CPU_AVX_512VL       = 21,
 
-    CPU_NEON            = 100
+    CPU_NEON            = 100,
+
+    CPU_VSX             = 200,
+
+    CPU_AVX512_SKX      = 256, //!< Skylake-X with AVX-512F/CD/BW/DQ/VL
+
+    CPU_MAX_FEATURE     = 512  // see CV_HARDWARE_MAX_FEATURE
 };
 
 
@@ -244,12 +257,22 @@ Cv64suf;
 #  define DISABLE_OPENCV_24_COMPATIBILITY
 #endif
 
-#if (defined _WIN32 || defined WINCE || defined __CYGWIN__) && defined CVAPI_EXPORTS
-#  define CV_EXPORTS __declspec(dllexport)
-#elif defined __GNUC__ && __GNUC__ >= 4
-#  define CV_EXPORTS __attribute__ ((visibility ("default")))
+#ifdef CVAPI_EXPORTS
+# if (defined _WIN32 || defined WINCE || defined __CYGWIN__)
+#   define CV_EXPORTS __declspec(dllexport)
+# elif defined __GNUC__ && __GNUC__ >= 4
+#   define CV_EXPORTS __attribute__ ((visibility ("default")))
+# endif
+#endif
+
+#ifndef CV_EXPORTS
+# define CV_EXPORTS
+#endif
+
+#ifdef _MSC_VER
+#   define CV_EXPORTS_TEMPLATE
 #else
-#  define CV_EXPORTS
+#   define CV_EXPORTS_TEMPLATE CV_EXPORTS
 #endif
 
 #ifndef CV_DEPRECATED

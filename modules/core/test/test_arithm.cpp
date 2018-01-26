@@ -806,6 +806,11 @@ struct ConvertScaleAbsOp : public BaseElemWiseOp
     {
         cvtest::add(src[0], alpha, Mat(), 0, Scalar::all(gamma[0]), dst, CV_8UC(src[0].channels()), true);
     }
+    int getRandomType(RNG& rng)
+    {
+        return cvtest::randomType(rng, _OutputArray::DEPTH_MASK_ALL, 1,
+            ninputs > 1 ? ARITHM_MAX_CHANNELS : 4);
+    }
     double getMaxErr(int)
     {
         return 1;
@@ -1860,6 +1865,24 @@ TEST(Core_BoolVector, support)
     }
     ASSERT_EQ( nz, countNonZero(test) );
     ASSERT_FLOAT_EQ((float)nz/n, (float)(mean(test)[0]));
+}
+
+TEST(MinMaxLoc, Mat_UcharMax_Without_Loc)
+{
+    Mat_<uchar> mat(50, 50);
+    uchar iMaxVal = numeric_limits<uchar>::max();
+    mat.setTo(iMaxVal);
+
+    double min, max;
+    Point minLoc, maxLoc;
+
+    minMaxLoc(mat, &min, &max, &minLoc, &maxLoc, Mat());
+
+    ASSERT_EQ(iMaxVal, min);
+    ASSERT_EQ(iMaxVal, max);
+
+    ASSERT_EQ(Point(0, 0), minLoc);
+    ASSERT_EQ(Point(0, 0), maxLoc);
 }
 
 TEST(MinMaxLoc, Mat_IntMax_Without_Mask)

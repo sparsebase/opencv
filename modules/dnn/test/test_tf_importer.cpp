@@ -11,6 +11,8 @@ Test for Tensorflow models loading
 
 #include "test_precomp.hpp"
 #include "npy_blob.hpp"
+#include <opencv2/core/ocl.hpp>
+#include <opencv2/ts/ocl_test.hpp>
 
 namespace cvtest
 {
@@ -74,14 +76,36 @@ static std::string path(const std::string& file)
     return findDataFile("dnn/tensorflow/" + file, false);
 }
 
-static void runTensorFlowNet(const std::string& prefix,
-                             double l1 = 1e-5, double lInf = 1e-4)
+static void runTensorFlowNet(const std::string& prefix, int targetId = DNN_TARGET_CPU, bool hasText = false,
+                             double l1 = 1e-5, double lInf = 1e-4,
+                             bool memoryLoad = false)
 {
     std::string netPath = path(prefix + "_net.pb");
+    std::string netConfig = (hasText ? path(prefix + "_net.pbtxt") : "");
     std::string inpPath = path(prefix + "_in.npy");
     std::string outPath = path(prefix + "_out.npy");
 
-    Net net = readNetFromTensorflow(netPath);
+    Net net;
+    if (memoryLoad)
+    {
+        // Load files into a memory buffers
+        string dataModel;
+        ASSERT_TRUE(readFileInMemory(netPath, dataModel));
+
+        string dataConfig;
+        if (hasText)
+            ASSERT_TRUE(readFileInMemory(netConfig, dataConfig));
+
+        net = readNetFromTensorflow(dataModel.c_str(), dataModel.size(),
+                                    dataConfig.c_str(), dataConfig.size());
+    }
+    else
+        net = readNetFromTensorflow(netPath, netConfig);
+
+    ASSERT_FALSE(net.empty());
+
+    net.setPreferableBackend(DNN_BACKEND_DEFAULT);
+    net.setPreferableTarget(targetId);
 
     cv::Mat input = blobFromNPY(inpPath);
     cv::Mat target = blobFromNPY(outPath);
@@ -111,6 +135,11 @@ TEST(Test_TensorFlow, eltwise_add_mul)
     runTensorFlowNet("eltwise_add_mul");
 }
 
+OCL_TEST(Test_TensorFlow, eltwise_add_mul)
+{
+    runTensorFlowNet("eltwise_add_mul", DNN_TARGET_OPENCL);
+}
+
 TEST(Test_TensorFlow, pad_and_concat)
 {
     runTensorFlowNet("pad_and_concat");
@@ -120,6 +149,14 @@ TEST(Test_TensorFlow, batch_norm)
 {
     runTensorFlowNet("batch_norm");
     runTensorFlowNet("fused_batch_norm");
+    runTensorFlowNet("batch_norm_text", DNN_TARGET_CPU, true);
+}
+
+OCL_TEST(Test_TensorFlow, batch_norm)
+{
+    runTensorFlowNet("batch_norm", DNN_TARGET_OPENCL);
+    runTensorFlowNet("fused_batch_norm", DNN_TARGET_OPENCL);
+    runTensorFlowNet("batch_norm_text", DNN_TARGET_OPENCL, true);
 }
 
 TEST(Test_TensorFlow, pooling)
@@ -134,9 +171,16 @@ TEST(Test_TensorFlow, deconvolution)
     runTensorFlowNet("deconvolution");
 }
 
+OCL_TEST(Test_TensorFlow, deconvolution)
+{
+    runTensorFlowNet("deconvolution", DNN_TARGET_OPENCL);
+}
+
 TEST(Test_TensorFlow, matmul)
 {
     runTensorFlowNet("matmul");
+    runTensorFlowNet("nhwc_reshape_matmul");
+    runTensorFlowNet("nhwc_transpose_reshape_matmul");
 }
 
 TEST(Test_TensorFlow, defun)
@@ -148,26 +192,103 @@ TEST(Test_TensorFlow, reshape)
 {
     runTensorFlowNet("shift_reshape_no_reorder");
     runTensorFlowNet("reshape_reduce");
+    runTensorFlowNet("flatten", true);
 }
 
 TEST(Test_TensorFlow, fp16)
 {
     const float l1 = 1e-3;
     const float lInf = 1e-2;
-    runTensorFlowNet("fp16_single_conv", l1, lInf);
-    runTensorFlowNet("fp16_deconvolution", l1, lInf);
-    runTensorFlowNet("fp16_max_pool_odd_same", l1, lInf);
-    runTensorFlowNet("fp16_padding_valid", l1, lInf);
-    runTensorFlowNet("fp16_eltwise_add_mul", l1, lInf);
-    runTensorFlowNet("fp16_max_pool_odd_valid", l1, lInf);
-    runTensorFlowNet("fp16_pad_and_concat", l1, lInf);
-    runTensorFlowNet("fp16_max_pool_even", l1, lInf);
-    runTensorFlowNet("fp16_padding_same", l1, lInf);
+    runTensorFlowNet("fp16_single_conv", DNN_TARGET_CPU, false, l1, lInf);
+    runTensorFlowNet("fp16_deconvolution", DNN_TARGET_CPU, false, l1, lInf);
+    runTensorFlowNet("fp16_max_pool_odd_same", DNN_TARGET_CPU, false, l1, lInf);
+    runTensorFlowNet("fp16_padding_valid", DNN_TARGET_CPU, false, l1, lInf);
+    runTensorFlowNet("fp16_eltwise_add_mul", DNN_TARGET_CPU, false, l1, lInf);
+    runTensorFlowNet("fp16_max_pool_odd_valid", DNN_TARGET_CPU, false, l1, lInf);
+    runTensorFlowNet("fp16_pad_and_concat", DNN_TARGET_CPU, false, l1, lInf);
+    runTensorFlowNet("fp16_max_pool_even", DNN_TARGET_CPU, false, l1, lInf);
+    runTensorFlowNet("fp16_padding_same", DNN_TARGET_CPU, false, l1, lInf);
+}
+
+TEST(Test_TensorFlow, quantized)
+{
+    runTensorFlowNet("uint8_single_conv");
+}
+
+TEST(Test_TensorFlow, MobileNet_SSD)
+{
+    std::string netPath = findDataFile("dnn/ssd_mobilenet_v1_coco.pb", false);
+    std::string netConfig = findDataFile("dnn/ssd_mobilenet_v1_coco.pbtxt", false);
+    std::string imgPath = findDataFile("dnn/street.png", false);
+
+    Mat inp;
+    resize(imread(imgPath), inp, Size(300, 300));
+    inp = blobFromImage(inp, 1.0f / 127.5, Size(), Scalar(127.5, 127.5, 127.5), true);
+
+    std::vector<String> outNames(3);
+    outNames[0] = "concat";
+    outNames[1] = "concat_1";
+    outNames[2] = "detection_out";
+
+    std::vector<Mat> target(outNames.size());
+    for (int i = 0; i < outNames.size(); ++i)
+    {
+        std::string path = findDataFile("dnn/tensorflow/ssd_mobilenet_v1_coco." + outNames[i] + ".npy", false);
+        target[i] = blobFromNPY(path);
+    }
+
+    Net net = readNetFromTensorflow(netPath, netConfig);
+    net.setInput(inp);
+
+    std::vector<Mat> output;
+    net.forward(output, outNames);
+
+    normAssert(target[0].reshape(1, 1), output[0].reshape(1, 1));
+    normAssert(target[1].reshape(1, 1), output[1].reshape(1, 1), "", 1e-5, 3e-4);
+    normAssert(target[2].reshape(1, 1), output[2].reshape(1, 1), "", 4e-5, 1e-2);
+}
+
+OCL_TEST(Test_TensorFlow, MobileNet_SSD)
+{
+    throw SkipTestException("TODO: test is failed");
+    std::string netPath = findDataFile("dnn/ssd_mobilenet_v1_coco.pb", false);
+    std::string netConfig = findDataFile("dnn/ssd_mobilenet_v1_coco.pbtxt", false);
+    std::string imgPath = findDataFile("dnn/street.png", false);
+
+    Mat inp;
+    resize(imread(imgPath), inp, Size(300, 300));
+    inp = blobFromImage(inp, 1.0f / 127.5, Size(), Scalar(127.5, 127.5, 127.5), true);
+
+    std::vector<String> outNames(3);
+    outNames[0] = "concat";
+    outNames[1] = "concat_1";
+    outNames[2] = "detection_out";
+
+    std::vector<Mat> target(outNames.size());
+    for (int i = 0; i < outNames.size(); ++i)
+    {
+        std::string path = findDataFile("dnn/tensorflow/ssd_mobilenet_v1_coco." + outNames[i] + ".npy", false);
+        target[i] = blobFromNPY(path);
+    }
+
+    Net net = readNetFromTensorflow(netPath, netConfig);
+
+    net.setPreferableBackend(DNN_BACKEND_DEFAULT);
+    net.setPreferableTarget(DNN_TARGET_OPENCL);
+
+    net.setInput(inp);
+
+    std::vector<Mat> output;
+    net.forward(output, outNames);
+
+    normAssert(target[0].reshape(1, 1), output[0].reshape(1, 1));
+    normAssert(target[1].reshape(1, 1), output[1].reshape(1, 1), "", 1e-5, 2e-4);
+    normAssert(target[2].reshape(1, 1), output[2].reshape(1, 1), "", 4e-5, 1e-2);
 }
 
 TEST(Test_TensorFlow, lstm)
 {
-    runTensorFlowNet("lstm");
+    runTensorFlowNet("lstm", DNN_TARGET_CPU, true);
 }
 
 TEST(Test_TensorFlow, split)
@@ -178,6 +299,17 @@ TEST(Test_TensorFlow, split)
 TEST(Test_TensorFlow, resize_nearest_neighbor)
 {
     runTensorFlowNet("resize_nearest_neighbor");
+}
+
+TEST(Test_TensorFlow, memory_read)
+{
+    double l1 = 1e-5;
+    double lInf = 1e-4;
+    runTensorFlowNet("lstm", DNN_TARGET_CPU, true, l1, lInf, true);
+
+    runTensorFlowNet("batch_norm", DNN_TARGET_CPU, false, l1, lInf, true);
+    runTensorFlowNet("fused_batch_norm", DNN_TARGET_CPU, false, l1, lInf, true);
+    runTensorFlowNet("batch_norm_text", DNN_TARGET_CPU, true, l1, lInf, true);
 }
 
 }

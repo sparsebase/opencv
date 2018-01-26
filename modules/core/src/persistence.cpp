@@ -4513,7 +4513,7 @@ cvOpenFileStorage( const char* query, CvMemStorage* dststorage, int flags, const
 
         //mode = cvGetErrMode();
         //cvSetErrMode( CV_ErrModeSilent );
-        try
+        CV_TRY
         {
             switch (fs->fmt)
             {
@@ -4523,11 +4523,11 @@ cvOpenFileStorage( const char* query, CvMemStorage* dststorage, int flags, const
             default: break;
             }
         }
-        catch (...)
+        CV_CATCH_ALL
         {
             fs->is_opened = true;
             cvReleaseFileStorage( &fs );
-            throw;
+            CV_RETHROW();
         }
         //cvSetErrMode( mode );
 
@@ -4781,7 +4781,7 @@ icvDecodeSimpleFormat( const char* dt )
     int fmt_pairs[CV_FS_MAX_FMT_PAIRS], fmt_pair_count;
 
     fmt_pair_count = icvDecodeFormat( dt, fmt_pairs, CV_FS_MAX_FMT_PAIRS );
-    if( fmt_pair_count != 1 || fmt_pairs[0] > 4 )
+    if( fmt_pair_count != 1 || fmt_pairs[0] >= CV_CN_MAX)
         CV_Error( CV_StsError, "Too complex format for the matrix" );
 
     elem_type = CV_MAKETYPE( fmt_pairs[1], fmt_pairs[0] );
@@ -5986,11 +5986,11 @@ icvReadSeq( CvFileStorage* fs, CvFileNode* node )
             flags |= CV_SEQ_FLAG_HOLE;
         if( !strstr(flags_str, "untyped") )
         {
-            try
+            CV_TRY
             {
                 flags |= icvDecodeSimpleFormat(dt);
             }
-            catch(...)
+            CV_CATCH_ALL
             {
             }
         }
@@ -7367,8 +7367,18 @@ void read(const FileNode& node, std::vector<KeyPoint>& keypoints)
     if (first_node.isSeq())
     {
         // modern scheme
+#ifdef OPENCV_TRAITS_ENABLE_DEPRECATED
+        FileNodeIterator it = node.begin();
+        size_t total = (size_t)it.remaining;
+        keypoints.resize(total);
+        for (size_t i = 0; i < total; ++i, ++it)
+        {
+            (*it) >> keypoints[i];
+        }
+#else
         FileNodeIterator it = node.begin();
         it >> keypoints;
+#endif
         return;
     }
     keypoints.clear();
@@ -7394,8 +7404,18 @@ void read(const FileNode& node, std::vector<DMatch>& matches)
     if (first_node.isSeq())
     {
         // modern scheme
+#ifdef OPENCV_TRAITS_ENABLE_DEPRECATED
+        FileNodeIterator it = node.begin();
+        size_t total = (size_t)it.remaining;
+        matches.resize(total);
+        for (size_t i = 0; i < total; ++i, ++it)
+        {
+            (*it) >> matches[i];
+        }
+#else
         FileNodeIterator it = node.begin();
         it >> matches;
+#endif
         return;
     }
     matches.clear();

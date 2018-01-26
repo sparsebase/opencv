@@ -13,9 +13,9 @@ endif()
 
 set(the_description "Deep neural network module. It allows to load models from different frameworks and to make forward pass")
 
-ocv_add_dispatched_file("layers/layers_common" AVX AVX2)
+ocv_add_dispatched_file("layers/layers_common" AVX AVX2 AVX512_SKX)
 
-ocv_add_module(dnn opencv_core opencv_imgproc WRAP python matlab java)
+ocv_add_module(dnn opencv_core opencv_imgproc WRAP python matlab java js)
 ocv_warnings_disable(CMAKE_CXX_FLAGS -Wno-shadow -Wno-parentheses -Wmaybe-uninitialized -Wsign-promo
                                      -Wmissing-declarations -Wmissing-prototypes
 )
@@ -52,18 +52,22 @@ ocv_warnings_disable(CMAKE_CXX_FLAGS
     -Wdeprecated-declarations
     /wd4125 /wd4267 /wd4127 /wd4244 /wd4512 /wd4702
     /wd4456 /wd4510 /wd4610 /wd4800
+    /wd4701 /wd4703                    # potentially uninitialized local/pointer variable 'value' used
+    /wd4505                            # unreferenced local function has been removed
     -wd858 -wd2196
+    -Winvalid-offsetof                 # Apple Clang (attr_value.pb.cc)
 )
 
 if(PROTOBUF_UPDATE_FILES)
-  file(GLOB proto_files src/tensorflow/*.proto)
-  list(APPEND proto_files src/caffe/caffe.proto)
+  file(GLOB proto_files ${CMAKE_CURRENT_SOURCE_DIR}/src/tensorflow/*.proto)
+  list(APPEND proto_files ${CMAKE_CURRENT_SOURCE_DIR}/src/caffe/opencv-caffe.proto)
+  set(PROTOBUF_GENERATE_CPP_APPEND_PATH ON) # required for tensorflow
   PROTOBUF_GENERATE_CPP(Protobuf_HDRS Protobuf_SRCS ${proto_files})
 else()
   file(GLOB fw_srcs ${CMAKE_CURRENT_SOURCE_DIR}/misc/tensorflow/*.cc)
   file(GLOB fw_hdrs ${CMAKE_CURRENT_SOURCE_DIR}/misc/tensorflow/*.h)
-  list(APPEND fw_srcs ${CMAKE_CURRENT_SOURCE_DIR}/misc/caffe/caffe.pb.cc)
-  list(APPEND fw_hdrs ${CMAKE_CURRENT_SOURCE_DIR}/misc/caffe/caffe.pb.h)
+  list(APPEND fw_srcs ${CMAKE_CURRENT_SOURCE_DIR}/misc/caffe/opencv-caffe.pb.cc)
+  list(APPEND fw_hdrs ${CMAKE_CURRENT_SOURCE_DIR}/misc/caffe/opencv-caffe.pb.h)
   list(APPEND Protobuf_SRCS ${fw_srcs})
   list(APPEND Protobuf_HDRS ${fw_hdrs})
   list(APPEND Protobuf_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/misc/caffe)
@@ -95,16 +99,4 @@ if(BUILD_PERF_TESTS)
       ocv_target_link_libraries(opencv_perf_dnn caffe)
     endif()
   endif()
-endif()
-
-# ----------------------------------------------------------------------------
-# Torch7 importer of blobs and models, produced by Torch.nn module
-# ----------------------------------------------------------------------------
-OCV_OPTION(${the_module}_BUILD_TORCH_IMPORTER "Build Torch model importer" ON)
-if(${the_module}_BUILD_TORCH_IMPORTER)
-    message(STATUS "Torch importer has been enabled. To run the tests you have to install Torch "
-      "('th' executable should be available) "
-      "and generate testdata using opencv_extra/testdata/dnn/generate_torch_models.py script.")
-    add_definitions(-DENABLE_TORCH_IMPORTER=1)
-    ocv_warnings_disable(CMAKE_CXX_FLAGS /wd4702 /wd4127 /wd4267) #supress warnings in original torch files
 endif()

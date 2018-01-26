@@ -32,8 +32,8 @@ function(ocv_cmake_eval var_name)
 endfunction()
 
 macro(ocv_cmake_configure file_name var_name)
-  configure_file(${file_name} "${CMAKE_BINARY_DIR}/CMakeConfig-${var_name}.cmake" ${ARGN})
-  file(READ "${CMAKE_BINARY_DIR}/CMakeConfig-${var_name}.cmake" ${var_name})
+  file(READ "${file_name}" __config)
+  string(CONFIGURE "${__config}" ${var_name} ${ARGN})
 endmacro()
 
 macro(ocv_update VAR)
@@ -171,28 +171,54 @@ function(ocv_target_include_directories target)
       ";${ARGN};" MATCHES "/usr/include;")
     return() # workaround for GCC 6.x bug
   endif()
+  set(__params "")
+  set(__system_params "")
+  set(__var_name __params)
   foreach(dir ${ARGN})
-    get_filename_component(__abs_dir "${dir}" ABSOLUTE)
-    ocv_is_opencv_directory(__is_opencv_dir "${dir}")
-    if(__is_opencv_dir)
-      list(APPEND __params "${__abs_dir}")
+    if("${dir}" STREQUAL "SYSTEM")
+      set(__var_name __system_params)
     else()
-      list(APPEND __params "${dir}")
+      get_filename_component(__abs_dir "${dir}" ABSOLUTE)
+      ocv_is_opencv_directory(__is_opencv_dir "${dir}")
+      if(__is_opencv_dir)
+        list(APPEND ${__var_name} "${__abs_dir}")
+      else()
+        list(APPEND ${__var_name} "${dir}")
+      endif()
     endif()
   endforeach()
   if(HAVE_CUDA OR CMAKE_VERSION VERSION_LESS 2.8.11)
     include_directories(${__params})
+    include_directories(SYSTEM ${__system_params})
   else()
     if(TARGET ${target})
-      target_include_directories(${target} PRIVATE ${__params})
-      if(OPENCV_DEPENDANT_TARGETS_${target})
-        foreach(t ${OPENCV_DEPENDANT_TARGETS_${target}})
-          target_include_directories(${t} PRIVATE ${__params})
-        endforeach()
+      if(__params)
+        target_include_directories(${target} PRIVATE ${__params})
+        if(OPENCV_DEPENDANT_TARGETS_${target})
+          foreach(t ${OPENCV_DEPENDANT_TARGETS_${target}})
+            target_include_directories(${t} PRIVATE ${__params})
+          endforeach()
+        endif()
+      endif()
+      if(__system_params)
+        target_include_directories(${target} SYSTEM PRIVATE ${__system_params})
+        if(OPENCV_DEPENDANT_TARGETS_${target})
+          foreach(t ${OPENCV_DEPENDANT_TARGETS_${target}})
+            target_include_directories(${t} SYSTEM PRIVATE ${__system_params})
+          endforeach()
+        endif()
       endif()
     else()
-      set(__new_inc "${OCV_TARGET_INCLUDE_DIRS_${target}};${__params}")
-      set(OCV_TARGET_INCLUDE_DIRS_${target} "${__new_inc}" CACHE INTERNAL "")
+      if(__params)
+        set(__new_inc ${OCV_TARGET_INCLUDE_DIRS_${target}})
+        list(APPEND __new_inc ${__params})
+        set(OCV_TARGET_INCLUDE_DIRS_${target} "${__new_inc}" CACHE INTERNAL "")
+      endif()
+      if(__system_params)
+        set(__new_inc ${OCV_TARGET_INCLUDE_SYSTEM_DIRS_${target}})
+        list(APPEND __new_inc ${__system_params})
+        set(OCV_TARGET_INCLUDE_SYSTEM_DIRS_${target} "${__new_inc}" CACHE INTERNAL "")
+      endif()
     endif()
   endif()
 endfunction()
@@ -452,6 +478,9 @@ macro(OCV_OPTION variable description value)
       option(${variable} "${description}" ${__value})
     endif()
   else()
+    if(DEFINED ${variable})
+      # TODO: message(WARNING "Option will be ignored: ${variable} (=${${variable}})")
+    endif()
     unset(${variable} CACHE)
   endif()
   unset(__condition)
@@ -519,16 +548,68 @@ endmacro()
 
 if(NOT DEFINED CMAKE_ARGC) # Guard CMake standalone invocations
 
-set(OPENCV_BUILD_INFO_FILE "${CMAKE_BINARY_DIR}/version_string.tmp")
-file(REMOVE "${OPENCV_BUILD_INFO_FILE}")
+# Use this option carefully, CMake's install() will install symlinks instead of real files
+# It is fine for development, but should not be used by real installations
+set(__symlink_default OFF)  # preprocessing is required for old CMake like 2.8.12
+if(DEFINED ENV{BUILD_USE_SYMLINKS})
+  set(__symlink_default $ENV{BUILD_USE_SYMLINKS})
+endif()
+OCV_OPTION(BUILD_USE_SYMLINKS "Use symlinks instead of files copying during build (and !!INSTALL!!)" (${__symlink_default}) IF (UNIX OR DEFINED __symlink_default))
+
+if(CMAKE_VERSION VERSION_LESS "3.2")
+  macro(ocv_cmake_byproducts var_name)
+    set(${var_name}) # nothing
+  endmacro()
+else()
+  macro(ocv_cmake_byproducts var_name)
+    set(${var_name} BYPRODUCTS ${ARGN})
+  endmacro()
+endif()
+
+set(OPENCV_DEPHELPER "${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/dephelper" CACHE INTERNAL "")
+file(MAKE_DIRECTORY ${OPENCV_DEPHELPER})
+
+if(BUILD_USE_SYMLINKS)
+  set(__file0 "${CMAKE_CURRENT_LIST_FILE}")
+  set(__file1 "${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/symlink_test")
+  if(NOT IS_SYMLINK "${__file1}")
+    execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink "${__file0}" "${__file1}"
+        RESULT_VARIABLE SYMLINK_RESULT)
+    if(NOT SYMLINK_RESULT EQUAL 0)
+      file(REMOVE "${__file1}")
+    endif()
+    if(NOT IS_SYMLINK "${__file1}")
+      set(BUILD_USE_SYMLINKS 0 CACHE INTERNAL "")
+    endif()
+  endif()
+  if(NOT BUILD_USE_SYMLINKS)
+    message(STATUS "Build symlinks are not available (disabled)")
+  endif()
+endif()
+
+set(OPENCV_BUILD_INFO_STR "" CACHE INTERNAL "")
 function(ocv_output_status msg)
   message(STATUS "${msg}")
   string(REPLACE "\\" "\\\\" msg "${msg}")
   string(REPLACE "\"" "\\\"" msg "${msg}")
-  file(APPEND "${OPENCV_BUILD_INFO_FILE}" "\"${msg}\\n\"\n")
+  set(OPENCV_BUILD_INFO_STR "${OPENCV_BUILD_INFO_STR}\"${msg}\\n\"\n" CACHE INTERNAL "")
 endfunction()
 
 macro(ocv_finalize_status)
+  set(OPENCV_BUILD_INFO_FILE "${CMAKE_BINARY_DIR}/version_string.tmp")
+  if(EXISTS "${OPENCV_BUILD_INFO_FILE}")
+    file(READ "${OPENCV_BUILD_INFO_FILE}" __content)
+  else()
+    set(__content "")
+  endif()
+  if("${__content}" STREQUAL "${OPENCV_BUILD_INFO_STR}")
+    #message(STATUS "${OPENCV_BUILD_INFO_FILE} contains the same content")
+  else()
+    file(WRITE "${OPENCV_BUILD_INFO_FILE}" "${OPENCV_BUILD_INFO_STR}")
+  endif()
+  unset(__content)
+  unset(OPENCV_BUILD_INFO_STR CACHE)
+
   if(NOT OPENCV_SKIP_STATUS_FINALIZATION)
     if(DEFINED OPENCV_MODULE_opencv_core_BINARY_DIR)
       execute_process(COMMAND ${CMAKE_COMMAND} -E copy_if_different "${OPENCV_BUILD_INFO_FILE}" "${OPENCV_MODULE_opencv_core_BINARY_DIR}/version_string.inc" OUTPUT_QUIET)
@@ -600,6 +681,51 @@ endfunction()
 
 endif() # NOT DEFINED CMAKE_ARGC
 
+#
+# Generate a list of enabled features basing on conditions:
+#   IF <cond> THEN <title>: check condition and append title to the result if it is true
+#   ELSE <title>: return provided value instead of empty result
+#   EXCLUSIVE: break after first successful condition
+#
+# Usage:
+#   ocv_build_features_string(out [EXLUSIVE] [IF feature THEN title] ... [ELSE title])
+#
+function(ocv_build_features_string out)
+  set(result)
+  list(REMOVE_AT ARGV 0)
+  foreach(arg ${ARGV})
+    if(arg STREQUAL "EXCLUSIVE")
+      set(exclusive TRUE)
+    elseif(arg STREQUAL "IF")
+      set(then FALSE)
+      set(cond)
+    elseif(arg STREQUAL "THEN")
+      set(then TRUE)
+      set(title)
+    elseif(arg STREQUAL "ELSE")
+      set(then FALSE)
+      set(else TRUE)
+    else()
+      if(then)
+        if(${cond})
+          list(APPEND result "${arg}")
+          if(exclusive)
+            break()
+          endif()
+        endif()
+      elseif(else)
+        if(NOT result)
+          set(result "${arg}")
+        endif()
+      else()
+        list(APPEND cond ${arg})
+      endif()
+    endif()
+  endforeach()
+  set(${out} ${result} PARENT_SCOPE)
+endfunction()
+
+
 # remove all matching elements from the list
 macro(ocv_list_filterout lst regex)
   foreach(item ${${lst}})
@@ -607,6 +733,21 @@ macro(ocv_list_filterout lst regex)
       list(REMOVE_ITEM ${lst} "${item}")
     endif()
   endforeach()
+endmacro()
+
+# filter matching elements from the list
+macro(ocv_list_filter lst regex)
+  set(dst ${ARGN})
+  if(NOT dst)
+    set(dst ${lst})
+  endif()
+  set(__result ${${lst}})
+  foreach(item ${__result})
+    if(NOT item MATCHES "${regex}")
+      list(REMOVE_ITEM __result "${item}")
+    endif()
+  endforeach()
+  set(${dst} ${__result})
 endmacro()
 
 
@@ -942,22 +1083,36 @@ endfunction()
 
 function(ocv_target_compile_definitions target)
   _ocv_fix_target(target)
-  target_compile_definitions(${target} ${ARGN})
+  if(NOT TARGET ${target})
+    if(NOT DEFINED OPENCV_MODULE_${target}_LOCATION)
+      message(FATAL_ERROR "ocv_target_compile_definitions: invalid target: '${target}'")
+    endif()
+    set(OPENCV_MODULE_${target}_COMPILE_DEFINITIONS ${OPENCV_MODULE_${target}_COMPILE_DEFINITIONS} ${ARGN} CACHE INTERNAL "" FORCE)
+  else()
+    target_compile_definitions(${target} ${ARGN})
+  endif()
 endfunction()
 
 
 function(_ocv_append_target_includes target)
   if(DEFINED OCV_TARGET_INCLUDE_DIRS_${target})
     target_include_directories(${target} PRIVATE ${OCV_TARGET_INCLUDE_DIRS_${target}})
-    if (TARGET ${target}_object)
-      target_include_directories(${target}_object PRIVATE ${OCV_TARGET_INCLUDE_DIRS_${target}})
-    endif()
     if(OPENCV_DEPENDANT_TARGETS_${target})
       foreach(t ${OPENCV_DEPENDANT_TARGETS_${target}})
         target_include_directories(${t} PRIVATE ${OCV_TARGET_INCLUDE_DIRS_${target}})
       endforeach()
     endif()
     unset(OCV_TARGET_INCLUDE_DIRS_${target} CACHE)
+  endif()
+
+  if(DEFINED OCV_TARGET_INCLUDE_SYSTEM_DIRS_${target})
+    target_include_directories(${target} SYSTEM PRIVATE ${OCV_TARGET_INCLUDE_SYSTEM_DIRS_${target}})
+    if(OPENCV_DEPENDANT_TARGETS_${target})
+      foreach(t ${OPENCV_DEPENDANT_TARGETS_${target}})
+        target_include_directories(${t} SYSTEM PRIVATE ${OCV_TARGET_INCLUDE_SYSTEM_DIRS_${target}})
+      endforeach()
+    endif()
+    unset(OCV_TARGET_INCLUDE_SYSTEM_DIRS_${target} CACHE)
   endif()
 endfunction()
 
@@ -974,27 +1129,6 @@ function(ocv_add_library target)
   endif()
 
   add_library(${target} ${ARGN} ${cuda_objs})
-
-  # Add OBJECT library (added in cmake 2.8.8) to use in compound modules
-  if (NOT CMAKE_VERSION VERSION_LESS "2.8.8" AND OPENCV_ENABLE_OBJECT_TARGETS
-      AND NOT OPENCV_MODULE_${target}_CHILDREN
-      AND NOT OPENCV_MODULE_${target}_CLASS STREQUAL "BINDINGS"
-      AND NOT ${target} STREQUAL "opencv_ts"
-      AND (NOT BUILD_opencv_world OR NOT HAVE_CUDA)
-    )
-    set(sources ${ARGN})
-    ocv_list_filterout(sources "\\\\.(cl|inc|cu)$")
-    add_library(${target}_object OBJECT ${sources})
-    set_target_properties(${target}_object PROPERTIES
-      EXCLUDE_FROM_ALL True
-      EXCLUDE_FROM_DEFAULT_BUILD True
-      POSITION_INDEPENDENT_CODE True
-      )
-    if (ENABLE_SOLUTION_FOLDERS)
-      set_target_properties(${target}_object PROPERTIES FOLDER "object_libraries")
-    endif()
-    unset(sources)
-  endif()
 
   if(APPLE_FRAMEWORK AND BUILD_SHARED_LIBS)
     message(STATUS "Setting Apple target properties for ${target}")
@@ -1025,7 +1159,10 @@ endfunction()
 
 macro(ocv_get_libname var_name)
   get_filename_component(__libname "${ARGN}" NAME)
-  string(REGEX REPLACE "^lib(.+).(a|so)(.[.0-9]+)?$" "\\1" __libname "${__libname}")
+  # libopencv_core.so.3.3 -> opencv_core
+  string(REGEX REPLACE "^lib(.+)\\.(a|so|dll)(\\.[.0-9]+)?$" "\\1" __libname "${__libname}")
+  # MacOSX: libopencv_core.3.3.1.dylib -> opencv_core
+  string(REGEX REPLACE "^lib(.+[^.0-9])\\.([.0-9]+\\.)?dylib$" "\\1" __libname "${__libname}")
   set(${var_name} "${__libname}")
 endmacro()
 
@@ -1207,3 +1344,89 @@ set(${var_name} \"${${var_name}}\")
 ")
   endforeach()
 endmacro()
+
+macro(ocv_copyfiles_append_file list_var src dst)
+  list(LENGTH ${list_var} __id)
+  list(APPEND ${list_var} ${__id})
+  set(${list_var}_SRC_${__id} "${src}")
+  set(${list_var}_DST_${__id} "${dst}")
+endmacro()
+
+macro(ocv_copyfiles_append_dir list_var src dst)
+  set(__glob ${ARGN})
+  list(LENGTH ${list_var} __id)
+  list(APPEND ${list_var} ${__id})
+  set(${list_var}_SRC_${__id} "${src}")
+  set(${list_var}_DST_${__id} "${dst}")
+  set(${list_var}_MODE_${__id} "COPYDIR")
+  if(__glob)
+    set(${list_var}_GLOB_${__id} ${__glob})
+  endif()
+endmacro()
+
+macro(ocv_copyfiles_make_config_string content_var list_var)
+  set(var_name "${list_var}")
+  set(${content_var} "${${content_var}}
+set(${var_name} \"${${var_name}}\")
+")
+  foreach(__id ${${list_var}})
+    set(${content_var} "${${content_var}}
+set(${list_var}_SRC_${__id} \"${${list_var}_SRC_${__id}}\")
+set(${list_var}_DST_${__id} \"${${list_var}_DST_${__id}}\")
+")
+    if(DEFINED ${list_var}_MODE_${__id})
+      set(${content_var} "${${content_var}}set(${list_var}_MODE_${__id} \"${${list_var}_MODE_${__id}}\")\n")
+    endif()
+    if(DEFINED ${list_var}_GLOB_${__id})
+      set(${content_var} "${${content_var}}set(${list_var}_GLOB_${__id} \"${${list_var}_GLOB_${__id}}\")\n")
+    endif()
+  endforeach()
+endmacro()
+
+macro(ocv_copyfiles_make_config_file filename_var list_var)
+  ocv_copyfiles_make_config_string(${list_var}_CONFIG ${list_var})
+  set(${filename_var} "${CMAKE_CURRENT_BINARY_DIR}/copyfiles-${list_var}.cmake")
+  file(WRITE "${${filename_var}}" "${${list_var}_CONFIG}")
+endmacro()
+
+macro(ocv_copyfiles_add_forced_target target list_var comment_str)
+  ocv_copyfiles_make_config_file(CONFIG_FILE ${list_var})
+  ocv_cmake_byproducts(__byproducts BYPRODUCTS "${OPENCV_DEPHELPER}/${target}")
+  add_custom_target(${target}
+      ${__byproducts}  # required for add_custom_target() by ninja
+      COMMAND ${CMAKE_COMMAND}
+        "-DCONFIG_FILE:PATH=${CONFIG_FILE}"
+        "-DCOPYLIST_VAR:STRING=${list_var}"
+        "-DDEPHELPER=${OPENCV_DEPHELPER}/${target}"
+        -P "${OpenCV_SOURCE_DIR}/cmake/copy_files.cmake"
+      WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+      COMMENT "${comment_str}"
+      DEPENDS "${OpenCV_SOURCE_DIR}/cmake/copy_files.cmake"
+              # ninja warn about file(WRITE): "${SRC_COPY_CONFIG_FILE}"
+  )
+endmacro()
+
+macro(ocv_copyfiles_add_target target list_var comment_str)
+  set(deps ${ARGN})
+  ocv_copyfiles_make_config_file(CONFIG_FILE ${list_var})
+  add_custom_command(OUTPUT "${OPENCV_DEPHELPER}/${target}"
+      COMMAND ${CMAKE_COMMAND}
+        "-DCONFIG_FILE:PATH=${CONFIG_FILE}"
+        "-DCOPYLIST_VAR:STRING=${list_var}"
+        "-DDEPHELPER=${OPENCV_DEPHELPER}/${target}"
+        -P "${OpenCV_SOURCE_DIR}/cmake/copy_files.cmake"
+      WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+      COMMENT "${comment_str}"
+      DEPENDS "${OpenCV_SOURCE_DIR}/cmake/copy_files.cmake" ${deps}
+              # ninja warn about file(WRITE): "${SRC_COPY_CONFIG_FILE}"
+  )
+  add_custom_target(${target} DEPENDS "${OPENCV_DEPHELPER}/${target}")
+endmacro()
+
+
+# Needed by install(DIRECTORY ...)
+if(NOT CMAKE_VERSION VERSION_LESS 3.1)
+  set(compatible_MESSAGE_NEVER MESSAGE_NEVER)
+else()
+  set(compatible_MESSAGE_NEVER "")
+endif()

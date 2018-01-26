@@ -43,8 +43,12 @@
 #ifndef OPENCV_FEATURES_2D_HPP
 #define OPENCV_FEATURES_2D_HPP
 
+#include "opencv2/opencv_modules.hpp"
 #include "opencv2/core.hpp"
+
+#ifdef HAVE_OPENCV_FLANN
 #include "opencv2/flann/miniflann.hpp"
+#endif
 
 /**
   @defgroup features2d 2D Features Framework
@@ -206,11 +210,15 @@ public:
 
     virtual void write( FileStorage&) const;
 
-    virtual void read( const FileNode&);
+    // see corresponding cv::Algorithm method
+    CV_WRAP virtual void read( const FileNode&);
 
     //! Return true if detector object is empty
     CV_WRAP virtual bool empty() const;
     CV_WRAP virtual String getDefaultName() const;
+
+    // see corresponding cv::Algorithm method
+    CV_WRAP inline void write(const Ptr<FileStorage>& fs, const String& name = String()) const { Algorithm::write(fs, name); }
 };
 
 /** Feature detectors in OpenCV have wrappers with a common interface that enables you to easily switch
@@ -778,7 +786,7 @@ struct CV_EXPORTS SL2
  * Euclidean distance functor
  */
 template<class T>
-struct CV_EXPORTS L2
+struct L2
 {
     enum { normType = NORM_L2 };
     typedef T ValueType;
@@ -794,7 +802,7 @@ struct CV_EXPORTS L2
  * Manhattan distance (city block distance) functor
  */
 template<class T>
-struct CV_EXPORTS L1
+struct L1
 {
     enum { normType = NORM_L1 };
     typedef T ValueType;
@@ -981,7 +989,8 @@ public:
         read(fs.root());
     }
     // Reads matcher object from a file node
-    virtual void read( const FileNode& );
+    // see corresponding cv::Algorithm method
+    CV_WRAP virtual void read( const FileNode& );
     // Writes matcher object to a file storage
     virtual void write( FileStorage& ) const;
 
@@ -1007,6 +1016,10 @@ public:
     CV_WRAP static Ptr<DescriptorMatcher> create( const String& descriptorMatcherType );
 
     CV_WRAP static Ptr<DescriptorMatcher> create( int matcherType );
+
+
+    // see corresponding cv::Algorithm method
+    CV_WRAP inline void write(const Ptr<FileStorage>& fs, const String& name = String()) const { Algorithm::write(fs, name); }
 
 protected:
     /**
@@ -1099,6 +1112,7 @@ protected:
     bool crossCheck;
 };
 
+#if defined(HAVE_OPENCV_FLANN) || defined(CV_DOXYGEN)
 
 /** @brief Flann-based descriptor matcher.
 
@@ -1144,6 +1158,8 @@ protected:
     DescriptorCollection mergedDescriptors;
     int addedDescCount;
 };
+
+#endif
 
 //! @} features2d_match
 

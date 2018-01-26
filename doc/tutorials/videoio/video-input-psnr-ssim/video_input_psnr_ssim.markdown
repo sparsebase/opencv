@@ -7,7 +7,7 @@ Goal
 Today it is common to have a digital video recording system at your disposal. Therefore, you will
 eventually come to the situation that you no longer process a batch of images, but video streams.
 These may be of two kinds: real-time image feed (in the case of a webcam) or prerecorded and hard
-disk drive stored files. Luckily OpenCV threats these two in the same manner, with the same C++
+disk drive stored files. Luckily OpenCV treats these two in the same manner, with the same C++
 class. So here's what you'll learn in this tutorial:
 
 -   How to open and read video streams
@@ -244,8 +244,4 @@ the console. Expect to see something like:
 
 You may observe a runtime instance of this on the [YouTube here](https://www.youtube.com/watch?v=iOcNljutOgg).
 
-\htmlonly
-<div align="center">
-<iframe title="Video Input with OpenCV (Plus PSNR and MSSIM)" width="560" height="349" src="http://www.youtube.com/embed/iOcNljutOgg?rel=0&loop=1" frameborder="0" allowfullscreen align="middle"></iframe>
-</div>
-\endhtmlonly
+@youtube{iOcNljutOgg}

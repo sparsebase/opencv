@@ -56,6 +56,15 @@ MACRO(_PCH_GET_COMPILE_FLAGS _out_compile_flags)
           endforeach()
         endif()
 
+        GET_TARGET_PROPERTY(_cxx_standard ${_PCH_current_target} CXX_STANDARD)
+        if (_cxx_standard)
+            GET_TARGET_PROPERTY(_cxx_extensions ${_PCH_current_target} CXX_EXTENSIONS)
+            if (_cxx_extensions)
+                LIST(APPEND ${_out_compile_flags} "${CMAKE_CXX${_cxx_standard}_EXTENSION_COMPILE_OPTION}")
+            else()
+                LIST(APPEND ${_out_compile_flags} "${CMAKE_CXX${_cxx_standard}_STANDARD_COMPILE_OPTION}")
+            endif()
+        endif()
     ELSE()
         ## TODO ... ? or does it work out of the box
     ENDIF()
@@ -259,6 +268,24 @@ MACRO(ADD_PRECOMPILED_HEADER _targetName _input)
         if(NOT __DEFINES MATCHES __DEFINES-NOTFOUND)
             list(APPEND _compile_FLAGS "${_PCH_define_prefix}${__DEFINES}")
         endif()
+    endif()
+
+    if(type STREQUAL "SHARED_LIBRARY" OR type STREQUAL "STATIC_LIBRARY")
+      get_target_property(__pic ${_targetName} POSITION_INDEPENDENT_CODE)
+      if(__pic AND CMAKE_CXX_COMPILE_OPTIONS_PIC
+          AND NOT OPENCV_SKIP_PCH_PIC_HANDLING
+          AND NOT OPENCV_SKIP_PCH_PIC_HANDLING_${_targetName}
+      )
+        list(APPEND _compile_FLAGS "${CMAKE_CXX_COMPILE_OPTIONS_PIC}")
+      endif()
+    elseif(type STREQUAL "EXECUTABLE")
+      get_target_property(__pie ${_targetName} POSITION_INDEPENDENT_CODE)
+      if(__pie AND CMAKE_CXX_COMPILE_OPTIONS_PIE
+          AND NOT OPENCV_SKIP_PCH_PIE_HANDLING
+          AND NOT OPENCV_SKIP_PCH_PIE_HANDLING_${_targetName}
+      )
+        list(APPEND _compile_FLAGS "${CMAKE_CXX_COMPILE_OPTIONS_PIE}")
+      endif()
     endif()
 
     get_target_property(DIRINC ${_targetName} INCLUDE_DIRECTORIES)

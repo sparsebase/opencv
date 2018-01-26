@@ -88,15 +88,17 @@ void initializeLayerFactory()
     CV_DNN_REGISTER_LAYER_CLASS(Convolution,    ConvolutionLayer);
     CV_DNN_REGISTER_LAYER_CLASS(Deconvolution,  DeconvolutionLayer);
     CV_DNN_REGISTER_LAYER_CLASS(Pooling,        PoolingLayer);
+    CV_DNN_REGISTER_LAYER_CLASS(ROIPooling,     PoolingLayer);
+    CV_DNN_REGISTER_LAYER_CLASS(PSROIPooling,   PoolingLayer);
     CV_DNN_REGISTER_LAYER_CLASS(LRN,            LRNLayer);
     CV_DNN_REGISTER_LAYER_CLASS(InnerProduct,   InnerProductLayer);
     CV_DNN_REGISTER_LAYER_CLASS(Softmax,        SoftmaxLayer);
     CV_DNN_REGISTER_LAYER_CLASS(MVN,            MVNLayer);
-    CV_DNN_REGISTER_LAYER_CLASS(LPNormalize,    LPNormalizeLayer);
 
     CV_DNN_REGISTER_LAYER_CLASS(ReLU,           ReLULayer);
     CV_DNN_REGISTER_LAYER_CLASS(ReLU6,          ReLU6Layer);
     CV_DNN_REGISTER_LAYER_CLASS(ChannelsPReLU,  ChannelsPReLULayer);
+    CV_DNN_REGISTER_LAYER_CLASS(PReLU,          ChannelsPReLULayer);
     CV_DNN_REGISTER_LAYER_CLASS(Sigmoid,        SigmoidLayer);
     CV_DNN_REGISTER_LAYER_CLASS(TanH,           TanHLayer);
     CV_DNN_REGISTER_LAYER_CLASS(ELU,            ELULayer);
@@ -113,11 +115,15 @@ void initializeLayerFactory()
     CV_DNN_REGISTER_LAYER_CLASS(Eltwise,        EltwiseLayer);
     CV_DNN_REGISTER_LAYER_CLASS(Permute,        PermuteLayer);
     CV_DNN_REGISTER_LAYER_CLASS(PriorBox,       PriorBoxLayer);
+    CV_DNN_REGISTER_LAYER_CLASS(PriorBoxClustered, PriorBoxLayer);
+    CV_DNN_REGISTER_LAYER_CLASS(Reorg,          ReorgLayer);
+    CV_DNN_REGISTER_LAYER_CLASS(Region,         RegionLayer);
     CV_DNN_REGISTER_LAYER_CLASS(DetectionOutput, DetectionOutputLayer);
     CV_DNN_REGISTER_LAYER_CLASS(NormalizeBBox,  NormalizeBBoxLayer);
     CV_DNN_REGISTER_LAYER_CLASS(Normalize,      NormalizeBBoxLayer);
     CV_DNN_REGISTER_LAYER_CLASS(Shift,          ShiftLayer);
     CV_DNN_REGISTER_LAYER_CLASS(Padding,        PaddingLayer);
+    CV_DNN_REGISTER_LAYER_CLASS(Proposal,       ProposalLayer);
     CV_DNN_REGISTER_LAYER_CLASS(Scale,          ScaleLayer);
 
     CV_DNN_REGISTER_LAYER_CLASS(LSTM,           LSTMLayer);
